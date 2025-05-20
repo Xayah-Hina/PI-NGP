@@ -171,6 +171,7 @@ class NeRFDataset:
             'W': width,
             'rays_o': rays['rays_o'],
             'rays_d': rays['rays_d'],
+            'color_space': self.dataset.color_space,
         }
         return results
 

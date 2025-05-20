@@ -33,6 +33,7 @@ if __name__ == '__main__':
         name=getattr(opt, 'name'),
         lr_encoding=getattr(opt, 'lr_encoding'),
         lr_net=getattr(opt, 'lr_net'),
+        use_fp16=getattr(opt, 'fp16'),
         device=device
     )
     trainer.train(
