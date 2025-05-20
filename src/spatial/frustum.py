@@ -16,7 +16,7 @@ def get_rays(poses, intrinsics, H, W, N=-1, error_map=None, patch_size=1):
 
     device = poses.device
     B = poses.shape[0]
-    fx, fy, cx, cy = intrinsics
+    fx, fy, cx, cy = [float(v) for v in intrinsics]
 
     i, j = torch.meshgrid(torch.linspace(0, W - 1, W, device=device), torch.linspace(0, H - 1, H, device=device), indexing='ij')  # float
     i = i.t().reshape([1, H * W]).expand([B, H * W]) + 0.5

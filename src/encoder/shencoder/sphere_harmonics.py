@@ -1,9 +1,6 @@
-import numpy as np
-
 import torch
 import torch.nn as nn
 from torch.autograd import Function
-from torch.autograd.function import once_differentiable
 
 try:
     import _shencoder as _backend

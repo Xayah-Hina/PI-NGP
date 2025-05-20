@@ -1,21 +1,8 @@
 from .spatial import get_rays
 import torch
-import numpy as np
 import os
 import typing
 import tqdm
-
-
-# ref: https://github.com/NVlabs/instant-ngp/blob/b76004c8cf478880227401ae763be4c02f80b62f/include/neural-graphics-primitives/nerf_loader.h#L50
-def nerf_matrix_to_ngp(pose, scale: float, offset: list):
-    # for the fox dataset, 0.33 scales camera radius to ~ 2
-    new_pose = np.array([
-        [pose[1, 0], -pose[1, 1], -pose[1, 2], pose[1, 3] * scale + offset[0]],
-        [pose[2, 0], -pose[2, 1], -pose[2, 2], pose[2, 3] * scale + offset[1]],
-        [pose[0, 0], -pose[0, 1], -pose[0, 2], pose[0, 3] * scale + offset[2]],
-        [0, 0, 0, 1],
-    ], dtype=np.float32)
-    return new_pose
 
 
 class DatasetColmap(torch.utils.data.Dataset):
@@ -29,6 +16,18 @@ class DatasetBlender(torch.utils.data.Dataset):
     def __init__(self, dataset_path, dataset_type: typing.Literal['train', 'val', 'test'], downscale: int, camera_radius_scale: float, camera_offset: list, use_error_map: bool, use_preload: bool, use_fp16: float, color_space: str, device: torch.device):
         import json
         import cv2
+        import numpy as np
+
+        # ref: https://github.com/NVlabs/instant-ngp/blob/b76004c8cf478880227401ae763be4c02f80b62f/include/neural-graphics-primitives/nerf_loader.h#L50
+        def nerf_matrix_to_ngp(pose, scale: float, offset: list):
+            # for the fox dataset, 0.33 scales camera radius to ~ 2
+            new_pose = np.array([
+                [pose[1, 0], -pose[1, 1], -pose[1, 2], pose[1, 3] * scale + offset[0]],
+                [pose[2, 0], -pose[2, 1], -pose[2, 2], pose[2, 3] * scale + offset[1]],
+                [pose[0, 0], -pose[0, 1], -pose[0, 2], pose[0, 3] * scale + offset[2]],
+                [0, 0, 0, 1],
+            ], dtype=np.float32)
+            return new_pose
 
         images = []
         poses = []
@@ -64,7 +63,7 @@ class DatasetBlender(torch.utils.data.Dataset):
                 raise RuntimeError('Failed to load focal length, please check the transforms.json!')
             cx = (transform['cx'] / downscale) if 'cx' in transform else (self.width / 2)
             cy = (transform['cy'] / downscale) if 'cy' in transform else (self.height / 2)
-            self.intrinsics = np.array([fl_x, fl_y, cx, cy])
+            self.intrinsics = torch.tensor([fl_x, fl_y, cx, cy])
 
         self.images = torch.from_numpy(np.stack(images, axis=0))  # [N, H, W, C]
         self.poses = torch.from_numpy(np.stack(poses, axis=0))  # [N, 4, 4]
@@ -161,10 +160,10 @@ class NeRFDataset:
 
         images = torch.stack([item['image'] for item in batch], dim=0) if self.dataset.images is not None else None
         if images is not None:
-            images = images.to(self.device) # [B, H, W, 3/4]
+            images = images.to(self.device)  # [B, H, W, 3/4]
             if self.dataset_type == 'train':
                 C = images.shape[-1]
-                images = torch.gather(images.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1)) # [B, N, 3/4]
+                images = torch.gather(images.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1))  # [B, N, 3/4]
         results = {
             'images': images,
             'time': times,

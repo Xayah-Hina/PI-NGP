@@ -1,9 +1,6 @@
-import numpy as np
-
 import torch
 import torch.nn as nn
 from torch.autograd import Function
-from torch.autograd.function import once_differentiable
 
 try:
     import _freqencoder as _backend
@@ -33,7 +30,6 @@ class _freq_encoder(Function):
         return outputs
     
     @staticmethod
-    #@once_differentiable
     @torch.amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad):
         # grad: [B, C * C]

@@ -18,6 +18,9 @@ def parse_argument():
     parser.add_argument('--batch_size', type=int, default=1, help="batch size")  # used by [NeRFDataset]
     parser.add_argument('--num_rays', type=int, default=4096, help="batch rays")  # used by [NeRFDataset]
 
+    parser.add_argument('--lr_encoding', type=float, default=1e-2, help="initial learning rate")
+    parser.add_argument('--lr_net', type=float, default=1e-3, help="initial learning rate")
+
     return parser.parse_args()
 
 
@@ -26,13 +29,18 @@ if __name__ == '__main__':
     opt.name = 'PI-NGP'
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    trainer = Trainer(opt=opt, device=device)
+    trainer = Trainer(
+        name=getattr(opt, 'name'),
+        lr_encoding=getattr(opt, 'lr_encoding'),
+        lr_net=getattr(opt, 'lr_net'),
+        device=device
+    )
     trainer.train(
-        train_loader=NeRFDataset(opt, dataset_type='train', num_rays=getattr(opt, 'num_rays'), device=device).dataloader(),
-        valid_loader=NeRFDataset(opt, dataset_type='val', num_rays=getattr(opt, 'num_rays'), device=device).dataloader(),
+        train_dataset=NeRFDataset(opt, dataset_type='train', num_rays=getattr(opt, 'num_rays'), device=device),
+        valid_dataset=NeRFDataset(opt, dataset_type='val', num_rays=getattr(opt, 'num_rays'), device=device),
         max_epochs=20,
     )
     trainer.evaluate(
-        test_loader=NeRFDataset(opt, dataset_type='test', num_rays=getattr(opt, 'num_rays'), device=device).dataloader(),
+        test_dataset=NeRFDataset(opt, dataset_type='test', num_rays=getattr(opt, 'num_rays'), device=device).dataloader(),
         name="test",
     )
