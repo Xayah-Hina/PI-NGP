@@ -60,7 +60,7 @@ class Trainer:
         else:
             raise NotImplementedError(f"Model {config.model} not implemented")
         self.optimizer = torch.optim.Adam(self.model.get_params(config.lr_encoding, config.lr_net), betas=(0.9, 0.99), eps=1e-15)
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda epoch: 1)  # TODO: implement a proper scheduler
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda iter: 0.1 ** min(iter / 30000, 1))
         self.criterion = torch.nn.MSELoss(reduction='none')
         self.scaler = torch.amp.GradScaler('cuda', enabled=config.use_fp16)
         self.ema = torch_ema.ExponentialMovingAverage(self.model.parameters(), decay=config.ema_decay)
@@ -177,6 +177,7 @@ class Trainer:
     def test(self, test_dataset: NeRFDataset):
         import numpy as np
         import imageio
+        import cv2
         save_path = os.path.join(self.workspace, 'results')
         os.makedirs(save_path, exist_ok=True)
         name = f'{self.name}_ep{self.epoch:04d}'
@@ -207,9 +208,9 @@ class Trainer:
 
                 all_preds.append(pred)
                 all_preds_depth.append(pred_depth)
+                cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_rgb.png'), cv2.cvtColor(pred, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_depth.png'), pred_depth)
 
-        all_preds = np.stack(all_preds, axis=0)
-        all_preds_depth = np.stack(all_preds_depth, axis=0)
         imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
         imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
