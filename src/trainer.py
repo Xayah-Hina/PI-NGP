@@ -1,5 +1,5 @@
 from .network import NeRFNetworkNGP, NeRFNetworkBasis, NeRFRendererStatic, NeRFRendererDynamic
-from .provider import NeRFDataset
+from .dataset import NeRFDataset
 import torch
 import torch.utils.tensorboard
 import torch_ema
@@ -34,10 +34,9 @@ class TrainerConfig:
     ema_decay: float = dataclasses.field(default=0.95, metadata={"help": "decay rate for exponential moving average"})
 
     use_fp16: bool = dataclasses.field(default=True, metadata={"help": "use amp mixed precision training"})
-    preload: bool = dataclasses.field(default=True, metadata={"help": "preload all data into GPU, accelerate training but use more GPU memory"})
     device: str = dataclasses.field(default="cuda:0", metadata={"help": "device to use, usually setting to None is OK. (auto choose device)"})
 
-    dt_gamma: float = dataclasses.field(default=1 / 128, metadata={"help": "dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)"})
+    dt_gamma: float = dataclasses.field(default=0, metadata={"help": "dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)"})
 
 
 class Trainer:
