@@ -182,7 +182,7 @@ class Trainer:
         os.makedirs(save_path, exist_ok=True)
         name = f'{self.name}_ep{self.epoch:04d}'
 
-        all_preds = []
+        all_rgb_side_by_side = []
         all_preds_depth = []
 
         self.model.eval()
@@ -192,9 +192,9 @@ class Trainer:
                 data: dict
                 with torch.amp.autocast('cuda', enabled=self.use_fp16):
                     if isinstance(self.model, NeRFRendererStatic):
-                        preds, preds_depth = self.test_step_static(data, bg_color=None)
+                        preds, preds_depth, gt_rgb = self.test_step_static(data, bg_color=None)
                     elif isinstance(self.model, NeRFRendererDynamic):
-                        preds, preds_depth = self.test_step_dynamics(data, bg_color=None)
+                        preds, preds_depth, gt_rgb = self.test_step_dynamics(data, bg_color=None)
                     else:
                         raise NotImplementedError(f"Model {self.model.__class__.__name__} not implemented")
                 if data['color_space'] == 'linear':
@@ -203,15 +203,23 @@ class Trainer:
                 pred = preds[0].detach().cpu().numpy()
                 pred = (pred * 255).astype(np.uint8)
 
+                gt = gt_rgb[0].detach().cpu().numpy()
+                gt = (gt * 255).astype(np.uint8)
+
+                pred_bgr = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+                gt_bgr = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+                side_by_side = np.concatenate([gt_bgr, pred_bgr], axis=1)  # 左GT，右Pred
+
                 pred_depth = preds_depth[0].detach().cpu().numpy()
                 pred_depth = (pred_depth * 255).astype(np.uint8)
 
-                all_preds.append(pred)
-                all_preds_depth.append(pred_depth)
-                cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_rgb.png'), cv2.cvtColor(pred, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_rgb.png'), side_by_side)
                 cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_depth.png'), pred_depth)
 
-        imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
+                all_rgb_side_by_side.append(side_by_side)
+                all_preds_depth.append(pred_depth)
+
+        imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_rgb_side_by_side, fps=25, quality=8, macro_block_size=1)
         imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
     def train_step_static(self, data):
@@ -318,6 +326,8 @@ class Trainer:
 
         if bg_color is not None:
             bg_color = bg_color.to(self.device)
+        else:
+            bg_color = 1
 
         outputs = self.model.render_static(
             rays_o=rays_o,
@@ -333,7 +343,19 @@ class Trainer:
         pred_rgb = outputs['image'].reshape(-1, H, W, 3)
         pred_depth = outputs['depth'].reshape(-1, H, W)
 
-        return pred_rgb, pred_depth
+        gt_rgb = None
+        if 'images' in data:
+            images = data['images']
+            color_space = data['color_space']
+            B, H, W, C = images.shape
+            if color_space == 'linear':
+                images[..., :3] = srgb_to_linear(images[..., :3])
+            if C == 4:
+                gt_rgb = images[..., :3] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+            else:
+                gt_rgb = images
+
+        return pred_rgb, pred_depth, gt_rgb
 
     def test_step_dynamics(self, data, bg_color):
         rays_o = data['rays_o']  # [B, N, 3]
@@ -358,4 +380,16 @@ class Trainer:
         pred_rgb = outputs['image'].reshape(-1, H, W, 3)
         pred_depth = outputs['depth'].reshape(-1, H, W)
 
-        return pred_rgb, pred_depth
+        gt_rgb = None
+        if 'images' in data:
+            images = data['images']
+            color_space = data['color_space']
+            B, H, W, C = images.shape
+            if color_space == 'linear':
+                images[..., :3] = srgb_to_linear(images[..., :3])
+            if C == 4 and bg_color is not None:
+                gt_rgb = images[..., :3] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+            else:
+                gt_rgb = images
+
+        return pred_rgb, pred_depth, gt_rgb
