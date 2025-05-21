@@ -74,7 +74,7 @@ class NeRFNetworkBasis(NeRFRendererDynamic):
         self.color_net = torch.nn.ModuleList(color_net)
 
         # background network
-        if self.bg_radius > 0:
+        if self.runtime_params['bg_radius'] > 0:
             self.encoder_bg = get_encoder(encoding_bg, input_dim=2, num_levels=4, log2_hashmap_size=19, desired_resolution=2048)  # much smaller hashgrid
             bg_net = []
             for l in range(num_layers_bg):
@@ -91,7 +91,7 @@ class NeRFNetworkBasis(NeRFRendererDynamic):
         else:
             self.bg_net = None
 
-        self.runtime_params = {
+        self.runtime_params.update({
             'num_layers_sigma': num_layers_sigma,
             'num_layers_basis': num_layers_basis,
             'num_layers_color': num_layers_color,
@@ -99,7 +99,7 @@ class NeRFNetworkBasis(NeRFRendererDynamic):
             'sigma_basis_dim': sigma_basis_dim,
             'color_basis_dim': color_basis_dim,
             'bound': bound,
-        }
+        })
 
     def forward(self, x, d, t):
         """
@@ -162,7 +162,7 @@ class NeRFNetworkBasis(NeRFRendererDynamic):
         color_basis = h[0, self.runtime_params['sigma_basis_dim']:]
 
         # sigma
-        x = self.encoder_spatial(x, bound=self.bound)
+        x = self.encoder_spatial(x, bound=self.runtime_params['bound'])
         h = x
         for l in range(self.runtime_params['num_layers_sigma']):
             h = self.sigma_net[l](h)
@@ -206,7 +206,7 @@ class NeRFNetworkBasis(NeRFRendererDynamic):
             {'params': self.encoder_time.parameters(), 'lr': lr_encoding},
             {'params': self.basis_net.parameters(), 'lr': lr_net},
         ]
-        if self.bg_radius > 0:
+        if self.runtime_params['bg_radius'] > 0:
             params.append({'params': self.encoder_bg.parameters(), 'lr': lr_encoding})
             params.append({'params': self.bg_net.parameters(), 'lr': lr_net})
 

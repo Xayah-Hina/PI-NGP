@@ -89,7 +89,7 @@ class Trainer:
             'global_step': self.global_step,
         }
 
-        if self.model.cuda_ray:
+        if self.model.runtime_params['cuda_ray']:
             state['mean_count'] = self.model.mean_count
             state['mean_density'] = self.model.mean_density
 
@@ -126,7 +126,7 @@ class Trainer:
     def train(self, train_dataset: NeRFDataset, valid_dataset: NeRFDataset, max_epochs: int):
 
         # mark untrained region (i.e., not covered by any camera from the training dataset)
-        if self.model.cuda_ray:
+        if self.model.runtime_params['cuda_ray']:
             self.model.mark_untrained_grid(train_dataset.dataset.poses, train_dataset.dataset.intrinsics)
 
         self.error_map = train_dataset.dataset.error_map
@@ -142,7 +142,7 @@ class Trainer:
                 self.global_step += 1
                 self.local_step += 1
                 # update grid every 16 steps
-                if self.model.cuda_ray and self.global_step % 200 == 0:
+                if self.model.runtime_params['cuda_ray'] and self.global_step % 200 == 0:
                     with torch.amp.autocast('cuda', enabled=self.use_fp16):
                         self.model.update_extra_state()
 
@@ -217,7 +217,7 @@ class Trainer:
         if color_space == 'linear':
             images[..., :3] = srgb_to_linear(images[..., :3])
 
-        if C == 3 or self.model.bg_radius > 0:
+        if C == 3 or self.model.runtime_params['bg_radius'] > 0:
             bg_color = 1
         # train with random background color if not using a bg model and has alpha channel.
         else:

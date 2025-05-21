@@ -48,7 +48,8 @@ class DatasetBlender(torch.utils.data.Dataset):
                 heights.append(image.shape[0])
                 images.append(image)
                 poses.append(nerf_matrix_to_ngp(np.array(f['transform_matrix'], dtype=np.float32), scale=camera_radius_scale, offset=camera_offset))
-                times.append(f['time'])
+                if 'time' in f:
+                    times.append(f['time'])
             assert len(set(widths)) == 1 and len(set(heights)) == 1, '[INVALID DATASET IMAGES SIZE] All images must have the same size'
             self.width = set(widths).pop()  # int
             self.height = set(widths).pop()  # int
@@ -69,12 +70,12 @@ class DatasetBlender(torch.utils.data.Dataset):
 
         self.images = torch.from_numpy(np.stack(images, axis=0))  # [N, H, W, C]
         self.poses = torch.from_numpy(np.stack(poses, axis=0))  # [N, 4, 4]
-        self.times = torch.from_numpy(np.asarray(times, dtype=np.float32)).view(-1, 1)  # [N, 1]
+        self.times = torch.from_numpy(np.asarray(times, dtype=np.float32)).view(-1, 1) if len(times) > 0 else None
         self.dtype = torch.half if (use_fp16 and color_space != 'linear') else torch.float
         self.color_space = color_space
 
         # manual normalize
-        if self.times.max() > 1:
+        if self.times is not None and self.times.max() > 1:
             self.times = self.times / (self.times.max() + 1e-8)  # normalize to [0, 1]
 
         # calculate mean radius of all camera poses
@@ -88,7 +89,8 @@ class DatasetBlender(torch.utils.data.Dataset):
         if use_preload:
             self.images = self.images.to().to(device)
             self.poses = self.poses.to(device)
-            self.times = self.times.to(device)
+            if self.times is not None:
+                self.times = self.times.to(device)
             if self.error_map is not None:
                 self.error_map = self.error_map.to(device)
 
@@ -102,7 +104,7 @@ class DatasetBlender(torch.utils.data.Dataset):
         return {
             'image': self.images[idx],
             'pose': self.poses[idx],
-            'time': self.times[idx],
+            'time': self.times[idx] if self.times is not None else None,
             'error_map': self.error_map[idx] if self.error_map is not None else None,
         }
 

@@ -46,13 +46,16 @@ class NeRFRendererStatic(torch.nn.Module):
 
     # separated density and color query (can accelerate non-cuda-ray mode.)
     def density(self, x):
-        raise NotImplementedError()
+        raise NotImplementedError('density is not implemented in NeRFRenderer, please implement it in your own model.')
 
     def color(self, x, d, mask, geo_feat):
-        raise NotImplementedError()
+        raise NotImplementedError('color is not implemented in NeRFRenderer, please implement it in your own model.')
 
     def background(self, x, d):
         raise NotImplementedError('background is not implemented in NeRFRenderer, please implement it in your own model.')
+
+    def get_params(self, lr_encoding, lr_net):
+        raise NotImplementedError('get_params is not implemented in NeRFRenderer, please implement it in your own model.')
 
     def reset_extra_state(self):
         if not self.runtime_params['cuda_ray']:
@@ -69,7 +72,7 @@ class NeRFRendererStatic(torch.nn.Module):
     @torch.no_grad()
     def mark_untrained_grid(self, poses, intrinsics, S=64):
 
-        if not self.cuda_ray:
+        if not self.runtime_params['cuda_ray']:
             raise NotImplementedError('mark_untrained_grid is not implemented for non-cuda-ray mode.')
 
         B = poses.shape[0]
@@ -129,7 +132,7 @@ class NeRFRendererStatic(torch.nn.Module):
     def update_extra_state(self, decay=0.95, S=128):
         # call before each epoch to update extra states.
 
-        if not self.cuda_ray:
+        if not self.runtime_params['cuda_ray']:
             raise NotImplementedError('update_extra_state is not implemented for non-cuda-ray mode.')
 
         ### update density grid
@@ -219,7 +222,7 @@ class NeRFRendererStatic(torch.nn.Module):
             self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
         self.local_step = 0
 
-        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
+        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.runtime_params["cascade"]):.3f} | [step counter] mean={self.mean_count}')
 
     def run_cuda(self, rays_o, rays_d, dt_gamma, bg_color, perturb, force_all_rays, max_steps, T_thresh):
         prefix = rays_o.shape[:-1]
@@ -354,17 +357,10 @@ class NeRFRendererDynamic(torch.nn.Module):
                  bg_radius=-1,
                  ):
         super().__init__()
-        self.bound = bound
-        self.bg_radius = bg_radius
-        self.min_near = min_near
-        self.density_scale = density_scale
-        self.density_thresh = density_thresh
 
-        ## parameters to be determined
-        self.cascade = 1 + math.ceil(math.log2(bound))
-        self.time_size = 64
-        self.grid_size = 128
-        ## parameters to be determined
+        cascade = 1 + math.ceil(math.log2(bound))
+        time_size = 64
+        grid_size = 128
 
         # prepare aabb with a 6D tensor (xmin, ymin, zmin, xmax, ymax, zmax)
         # NOTE: aabb (can be rectangular) is only used to generate points, we still rely on bound (always cubic) to calculate density grid and hashing.
@@ -372,19 +368,30 @@ class NeRFRendererDynamic(torch.nn.Module):
         self.register_buffer('aabb_infer', torch.tensor([-bound, -bound, -bound, bound, bound, bound], dtype=torch.float32))
 
         # extra state for cuda raymarching
-        self.cuda_ray = cuda_ray
         if cuda_ray:
             # density grid (with an extra time dimension)
-            self.register_buffer('density_grid', torch.zeros(self.time_size, self.cascade, self.grid_size ** 3))  # [T, CAS, H * H * H]
-            self.register_buffer('density_bitfield', torch.zeros(self.time_size, self.cascade * self.grid_size ** 3 // 8, dtype=torch.uint8))  # [T, CAS * H * H * H // 8]
+            self.register_buffer('density_grid', torch.zeros(time_size, cascade, grid_size ** 3))  # [T, CAS, H * H * H]
+            self.register_buffer('density_bitfield', torch.zeros(time_size, cascade * grid_size ** 3 // 8, dtype=torch.uint8))  # [T, CAS * H * H * H // 8]
             self.mean_density = 0
             self.iter_density = 0
             # time stamps for density grid
-            self.register_buffer('times', ((torch.arange(self.time_size, dtype=torch.float32) + 0.5) / self.time_size).view(-1, 1, 1))  # [T, 1, 1]
+            self.register_buffer('times', ((torch.arange(time_size, dtype=torch.float32) + 0.5) / time_size).view(-1, 1, 1))  # [T, 1, 1]
             # step counter
             self.register_buffer('step_counter', torch.zeros(16, 2, dtype=torch.int32))  # 16 is hardcoded for averaging...
             self.mean_count = 0
             self.local_step = 0
+
+        self.runtime_params = {
+            'cuda_ray': cuda_ray,
+            'bound': bound,
+            'density_scale': density_scale,
+            'min_near': min_near,
+            'density_thresh': density_thresh,
+            'bg_radius': bg_radius,
+            'cascade': cascade,
+            'time_size': time_size,
+            'grid_size': grid_size,
+        }
 
     def forward(self, x, d, t):
         raise NotImplementedError('forward is not implemented in NeRFRenderer, please implement it in your own model.')
@@ -400,7 +407,7 @@ class NeRFRendererDynamic(torch.nn.Module):
         raise NotImplementedError('background is not implemented in NeRFRenderer, please implement it in your own model.')
 
     def reset_extra_state(self):
-        if not self.cuda_ray:
+        if not self.runtime_params['cuda_ray']:
             return
         # density grid
         self.density_grid.zero_()
@@ -414,7 +421,7 @@ class NeRFRendererDynamic(torch.nn.Module):
     @torch.no_grad()
     def update_extra_state(self, decay=0.95, S=128):
         # call before each epoch to update extra states.
-        if not self.cuda_ray:
+        if not self.runtime_params['cuda_ray']:
             return
 
         ### update density grid
@@ -423,9 +430,9 @@ class NeRFRendererDynamic(torch.nn.Module):
         # full update.
         if self.iter_density < 16:
             # if True:
-            X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
-            Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
-            Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+            X = torch.arange(self.runtime_params['grid_size'], dtype=torch.int32, device=self.density_bitfield.device).split(S)
+            Y = torch.arange(self.runtime_params['grid_size'], dtype=torch.int32, device=self.density_bitfield.device).split(S)
+            Z = torch.arange(self.runtime_params['grid_size'], dtype=torch.int32, device=self.density_bitfield.device).split(S)
 
             for t, time in enumerate(self.times):
                 for xs in X:
@@ -436,13 +443,13 @@ class NeRFRendererDynamic(torch.nn.Module):
                             xx, yy, zz = torch.meshgrid(xs, ys, zs, indexing='ij')
                             coords = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)  # [N, 3], in [0, 128)
                             indices = raymarching.morton3D(coords).long()  # [N]
-                            xyzs = 2 * coords.float() / (self.grid_size - 1) - 1  # [N, 3] in [-1, 1]
+                            xyzs = 2 * coords.float() / (self.runtime_params['grid_size'] - 1) - 1  # [N, 3] in [-1, 1]
 
                             # cascading
-                            for cas in range(self.cascade):
-                                bound = min(2 ** cas, self.bound)
-                                half_grid_size = bound / self.grid_size
-                                half_time_size = 0.5 / self.time_size
+                            for cas in range(self.runtime_params['cascade']):
+                                bound = min(2 ** cas, self.runtime_params['bound'])
+                                half_grid_size = bound / self.runtime_params['grid_size']
+                                half_time_size = 0.5 / self.runtime_params['time_size']
                                 # scale to current cascade's resolution
                                 cas_xyzs = xyzs * (bound - half_grid_size)
                                 # add noise in coord [-hgs, hgs]
@@ -451,18 +458,18 @@ class NeRFRendererDynamic(torch.nn.Module):
                                 time_perturb = time + (torch.rand_like(time) * 2 - 1) * half_time_size
                                 # query density
                                 sigmas = self.density(cas_xyzs, time_perturb)['sigma'].reshape(-1).detach()
-                                sigmas *= self.density_scale
+                                sigmas *= self.runtime_params['density_scale']
                                 # assign
                                 tmp_grid[t, cas, indices] = sigmas
 
         # partial update (half the computation)
         # just update 100 times should be enough... too time consuming.
         elif self.iter_density < 100:
-            N = self.grid_size ** 3 // 4  # T * C * H * H * H / 4
+            N = self.runtime_params['grid_size'] ** 3 // 4  # T * C * H * H * H / 4
             for t, time in enumerate(self.times):
-                for cas in range(self.cascade):
+                for cas in range(self.runtime_params['cascade']):
                     # random sample some positions
-                    coords = torch.randint(0, self.grid_size, (N, 3), device=self.density_bitfield.device)  # [N, 3], in [0, 128)
+                    coords = torch.randint(0, self.runtime_params['grid_size'], (N, 3), device=self.density_bitfield.device)  # [N, 3], in [0, 128)
                     indices = raymarching.morton3D(coords).long()  # [N]
                     # random sample occupied positions
                     occ_indices = torch.nonzero(self.density_grid[t, cas] > 0).squeeze(-1)  # [Nz]
@@ -473,10 +480,10 @@ class NeRFRendererDynamic(torch.nn.Module):
                     indices = torch.cat([indices, occ_indices], dim=0)
                     coords = torch.cat([coords, occ_coords], dim=0)
                     # same below
-                    xyzs = 2 * coords.float() / (self.grid_size - 1) - 1  # [N, 3] in [-1, 1]
-                    bound = min(2 ** cas, self.bound)
-                    half_grid_size = bound / self.grid_size
-                    half_time_size = 0.5 / self.time_size
+                    xyzs = 2 * coords.float() / (self.runtime_params['grid_size'] - 1) - 1  # [N, 3] in [-1, 1]
+                    bound = min(2 ** cas, self.runtime_params['bound'])
+                    half_grid_size = bound / self.runtime_params['grid_size']
+                    half_time_size = 0.5 / self.runtime_params['time_size']
                     # scale to current cascade's resolution
                     cas_xyzs = xyzs * (bound - half_grid_size)
                     # add noise in [-hgs, hgs]
@@ -485,7 +492,7 @@ class NeRFRendererDynamic(torch.nn.Module):
                     time_perturb = time + (torch.rand_like(time) * 2 - 1) * half_time_size
                     # query density
                     sigmas = self.density(cas_xyzs, time_perturb)['sigma'].reshape(-1).detach()
-                    sigmas *= self.density_scale
+                    sigmas *= self.runtime_params['density_scale']
                     # assign
                     tmp_grid[t, cas, indices] = sigmas
 
@@ -501,8 +508,8 @@ class NeRFRendererDynamic(torch.nn.Module):
         self.iter_density += 1
 
         # convert to bitfield
-        density_thresh = min(self.mean_density, self.density_thresh)
-        for t in range(self.time_size):
+        density_thresh = min(self.mean_density, self.runtime_params['density_thresh'])
+        for t in range(self.runtime_params['time_size']):
             raymarching.packbits(self.density_grid[t], density_thresh, self.density_bitfield[t])
 
         ### update step counter
@@ -511,7 +518,7 @@ class NeRFRendererDynamic(torch.nn.Module):
             self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
         self.local_step = 0
 
-        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
+        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.runtime_params["cascade"]):.3f} | [step counter] mean={self.mean_count}')
 
     @torch.no_grad()
     def mark_untrained_grid(self, poses, intrinsics, S=64):
@@ -522,15 +529,15 @@ class NeRFRendererDynamic(torch.nn.Module):
         :return:
         """
 
-        if not self.cuda_ray:
+        if not self.runtime_params['cuda_ray']:
             return
 
         B = poses.shape[0]
         fx, fy, cx, cy = [float(v) for v in intrinsics]
 
-        X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
-        Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
-        Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+        X = torch.arange(self.runtime_params['grid_size'], dtype=torch.int32, device=self.density_bitfield.device).split(S)
+        Y = torch.arange(self.runtime_params['grid_size'], dtype=torch.int32, device=self.density_bitfield.device).split(S)
+        Z = torch.arange(self.runtime_params['grid_size'], dtype=torch.int32, device=self.density_bitfield.device).split(S)
 
         count = torch.zeros_like(self.density_grid[0])
         poses = poses.to(count.device)
@@ -545,12 +552,12 @@ class NeRFRendererDynamic(torch.nn.Module):
                     xx, yy, zz = torch.meshgrid(xs, ys, zs, indexing='ij')
                     coords = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)  # [N, 3], in [0, 128)
                     indices = raymarching.morton3D(coords).long()  # [N]
-                    world_xyzs = (2 * coords.float() / (self.grid_size - 1) - 1).unsqueeze(0)  # [1, N, 3] in [-1, 1]
+                    world_xyzs = (2 * coords.float() / (self.runtime_params['grid_size'] - 1) - 1).unsqueeze(0)  # [1, N, 3] in [-1, 1]
 
                     # cascading
-                    for cas in range(self.cascade):
-                        bound = min(2 ** cas, self.bound)
-                        half_grid_size = bound / self.grid_size
+                    for cas in range(self.runtime_params['cascade']):
+                        bound = min(2 ** cas, self.runtime_params['bound'])
+                        half_grid_size = bound / self.runtime_params['grid_size']
                         # scale to current cascade's resolution
                         cas_world_xyzs = world_xyzs * (bound - half_grid_size)
 
@@ -576,7 +583,7 @@ class NeRFRendererDynamic(torch.nn.Module):
         # mark untrained grid as -1
         self.density_grid[count.unsqueeze(0).expand_as(self.density_grid) == 0] = -1
 
-        print(f'[mark untrained grid] {(count == 0).sum()} from {self.grid_size ** 3 * self.cascade}')
+        print(f'[mark untrained grid] {(count == 0).sum()} from {self.runtime_params["grid_size"] ** 3 * self.runtime_params["cascade"]}')
 
     def run_cuda(self, rays_o, rays_d, time, dt_gamma, bg_color, perturb, force_all_rays, max_steps):
         """
@@ -599,18 +606,18 @@ class NeRFRendererDynamic(torch.nn.Module):
         device = rays_o.device
 
         # pre-calculate near far
-        nears, fars = raymarching.near_far_from_aabb(rays_o, rays_d, self.aabb_train if self.training else self.aabb_infer, self.min_near)
+        nears, fars = raymarching.near_far_from_aabb(rays_o, rays_d, self.aabb_train if self.training else self.aabb_infer, self.runtime_params['min_near'])
 
         # mix background color
-        if self.bg_radius > 0:
+        if self.runtime_params['bg_radius'] > 0:
             # use the bg model to calculate bg_color
-            sph = raymarching.sph_from_ray(rays_o, rays_d, self.bg_radius)  # [N, 2] in [-1, 1]
+            sph = raymarching.sph_from_ray(rays_o, rays_d, self.runtime_params['bg_radius'])  # [N, 2] in [-1, 1]
             bg_color = self.background(sph, rays_d)  # [N, 3]
         elif bg_color is None:
             bg_color = 1
 
         # determine the correct frame of density grid to use
-        t = torch.floor(time[0][0] * self.time_size).clamp(min=0, max=self.time_size - 1).long()
+        t = torch.floor(time[0][0] * self.runtime_params['time_size']).clamp(min=0, max=self.runtime_params['time_size'] - 1).long()
 
         results = {}
 
@@ -620,7 +627,7 @@ class NeRFRendererDynamic(torch.nn.Module):
             counter.zero_()  # set to 0
             self.local_step += 1
 
-            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield[t], self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
+            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.runtime_params['bound'], self.density_bitfield[t], self.runtime_params['cascade'], self.runtime_params['grid_size'], nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
 
             # plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
 
@@ -628,7 +635,7 @@ class NeRFRendererDynamic(torch.nn.Module):
             # density_outputs = self.density(xyzs, time) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
             # sigmas = density_outputs['sigma']
             # rgbs = self.color(xyzs, dirs, **density_outputs)
-            sigmas = self.density_scale * sigmas
+            sigmas = self.runtime_params['density_scale'] * sigmas
 
             # print(f'valid RGB query ratio: {mask.sum().item() / mask.shape[0]} (total = {mask.sum().item()})')
 
@@ -668,13 +675,13 @@ class NeRFRendererDynamic(torch.nn.Module):
                 # decide compact_steps
                 n_step = max(min(N // n_alive, 8), 1)
 
-                xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.bound, self.density_bitfield[t], self.cascade, self.grid_size, nears, fars, 128, perturb if step == 0 else False, dt_gamma, max_steps)
+                xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.runtime_params['bound'], self.density_bitfield[t], self.runtime_params['cascade'], self.runtime_params['grid_size'], nears, fars, 128, perturb if step == 0 else False, dt_gamma, max_steps)
 
                 sigmas, rgbs, _ = self(xyzs, dirs, time)
                 # density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
                 # sigmas = density_outputs['sigma']
                 # rgbs = self.color(xyzs, dirs, **density_outputs)
-                sigmas = self.density_scale * sigmas
+                sigmas = self.runtime_params['density_scale'] * sigmas
 
                 raymarching.composite_rays(n_alive, n_step, rays_alive, rays_t, sigmas, rgbs, deltas, weights_sum, depth, image)
 
@@ -694,7 +701,7 @@ class NeRFRendererDynamic(torch.nn.Module):
         return results
 
     def render(self, rays_o, rays_d, time, dt_gamma, bg_color, perturb, force_all_rays, max_steps):
-        if self.cuda_ray:
+        if self.runtime_params['cuda_ray']:
             results = self.run_cuda(
                 rays_o=rays_o,
                 rays_d=rays_d,
