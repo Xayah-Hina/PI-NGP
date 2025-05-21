@@ -1,3 +1,5 @@
+import typing
+
 from ..spatial import raymarching
 import torch
 import math
@@ -30,7 +32,7 @@ class NeRFRendererStatic(torch.nn.Module):
             self.mean_count = 0
             self.local_step = 0
 
-        self.runtime_params = {
+        self.runtime_params: dict[str, typing.Any] = {
             'cuda_ray': cuda_ray,
             'bound': bound,
             'density_scale': density_scale,
@@ -381,7 +383,7 @@ class NeRFRendererDynamic(torch.nn.Module):
             self.mean_count = 0
             self.local_step = 0
 
-        self.runtime_params = {
+        self.runtime_params: dict[str, typing.Any] = {
             'cuda_ray': cuda_ray,
             'bound': bound,
             'density_scale': density_scale,

@@ -179,12 +179,15 @@ class NeRFDataset:
 
     def collate(self, batch: list):
         B = len(batch)  # a list of length 1
-        poses, times, width, height, intrinsics = torch.stack([item['pose'] for item in batch], dim=0), torch.stack([item['time'] for item in batch], dim=0), self.dataset.width, self.dataset.height, self.dataset.intrinsics
+        poses, width, height, intrinsics = torch.stack([item['pose'] for item in batch], dim=0), self.dataset.width, self.dataset.height, self.dataset.intrinsics
         error_maps = torch.stack([item['error_map'] for item in batch], dim=0) if self.dataset.error_map is not None else None
 
         poses = poses.to(self.device)  # [B, 4, 4]
-        times = times.to(self.device)  # [B, 1]
         rays = get_rays(poses, intrinsics, height, width, self.num_rays, error_maps)
+
+        times = torch.stack([item['time'] for item in batch], dim=0) if self.dataset.times is not None else None
+        if times is not None:
+            times = times.to(self.device)  # [B, 1]
 
         images = torch.stack([item['image'] for item in batch], dim=0) if self.dataset.images is not None else None
         if images is not None:
