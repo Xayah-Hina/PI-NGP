@@ -172,7 +172,7 @@ class NeRFDataset:
         else:
             raise NotImplementedError('[INVALID DATASET TYPE] NeRFDataset at: {}'.format(base_dataset_dir))
         self.type = type
-        self.num_rays = config.num_rays
+        self.num_rays = config.num_rays if type == 'train' else -1
         self.device = torch.device(config.device)
 
     def collate(self, batch: list):

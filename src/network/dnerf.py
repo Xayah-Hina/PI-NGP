@@ -238,7 +238,54 @@ class NeRFRenderer(torch.nn.Module):
 
             results['deform'] = deform
         else:
-            raise NotImplementedError('evaluation is not implemented in NeRFRenderer, please implement it in your own model.')
+            # allocate outputs
+            # if use autocast, must init as half so it won't be autocasted and lose reference.
+            # dtype = torch.half if torch.is_autocast_enabled() else torch.float32
+            # output should always be float32! only network inference uses half.
+            dtype = torch.float32
+
+            weights_sum = torch.zeros(N, dtype=dtype, device=device)
+            depth = torch.zeros(N, dtype=dtype, device=device)
+            image = torch.zeros(N, 3, dtype=dtype, device=device)
+
+            n_alive = N
+            rays_alive = torch.arange(n_alive, dtype=torch.int32, device=device) # [N]
+            rays_t = nears.clone() # [N]
+
+            step = 0
+
+            while step < max_steps:
+
+                # count alive rays
+                n_alive = rays_alive.shape[0]
+
+                # exit loop
+                if n_alive <= 0:
+                    break
+
+                # decide compact_steps
+                n_step = max(min(N // n_alive, 8), 1)
+
+                xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.bound, self.density_bitfield[t], self.cascade, self.grid_size, nears, fars, 128, perturb if step == 0 else False, dt_gamma, max_steps)
+
+                sigmas, rgbs, _ = self(xyzs, dirs, time)
+                # density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
+                # sigmas = density_outputs['sigma']
+                # rgbs = self.color(xyzs, dirs, **density_outputs)
+                sigmas = self.density_scale * sigmas
+
+                raymarching.composite_rays(n_alive, n_step, rays_alive, rays_t, sigmas, rgbs, deltas, weights_sum, depth, image)
+
+                rays_alive = rays_alive[rays_alive >= 0]
+
+                #print(f'step = {step}, n_step = {n_step}, n_alive = {n_alive}, xyzs: {xyzs.shape}')
+
+                step += n_step
+
+            image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
+            depth = torch.clamp(depth - nears, min=0) / (fars - nears)
+            image = image.view(*prefix, 3)
+            depth = depth.view(*prefix)
 
         results['depth'] = depth
         results['image'] = image

@@ -2,9 +2,15 @@ from .network import NeRFNetworkBasis
 from .provider import NeRFDataset
 import torch
 import torch_ema
+import tqdm
 import dataclasses
 import typing
-import tqdm
+import os
+
+
+@torch.jit.script
+def linear_to_srgb(x):
+    return torch.where(x < 0.0031308, 12.92 * x, 1.055 * x ** 0.41666 - 0.055)
 
 
 @torch.jit.script
@@ -14,8 +20,9 @@ def srgb_to_linear(x):
 
 @dataclasses.dataclass
 class TrainerConfig:
-    mode: typing.Literal["train", "test"] = dataclasses.field(default="train", metadata={"help": "mode of training"})
     name: str = dataclasses.field(default="default name", metadata={"help": "name of the experiment"})
+    workspace: str = dataclasses.field(default="workspace", metadata={"help": "workspace directory"})
+    mode: typing.Literal["train", "test"] = dataclasses.field(default="train", metadata={"help": "mode of training"})
     model: typing.Literal["dnerf", "nerf", "mipnerf"] = dataclasses.field(default="dnerf", metadata={"help": "model type"})
 
     lr_encoding: float = dataclasses.field(default=1e-2, metadata={"help": "initial learning rate for encoding"})
@@ -32,6 +39,7 @@ class TrainerConfig:
 class Trainer:
     def __init__(self, config: TrainerConfig):
         self.name = config.name
+        self.workspace = config.workspace
         if config.model == 'dnerf':
             self.model = NeRFNetworkBasis(
                 encoding_spatial='tiledgrid',
@@ -60,6 +68,52 @@ class Trainer:
             'dt_gamma': config.dt_gamma,
         }
 
+        self.load_checkpoint(checkpoint=None)
+
+    def save_checkpoint(self, full: bool, best: bool):
+        save_path = os.path.join(self.workspace, 'checkpoints')
+        os.makedirs(save_path, exist_ok=True)
+        name = f'{self.name}_ep{self.epoch:04d}'
+
+        state: dict[str, typing.Any] = {
+            'epoch': self.epoch,
+            'global_step': self.global_step,
+        }
+
+        if self.model.cuda_ray:
+            state['mean_count'] = self.model.mean_count
+            state['mean_density'] = self.model.mean_density
+
+        if full:
+            state['optimizer'] = self.optimizer.state_dict()
+            state['lr_scheduler'] = self.lr_scheduler.state_dict()
+            state['scaler'] = self.scaler.state_dict()
+            if self.ema is not None:
+                state['ema'] = self.ema.state_dict()
+
+        if not best:
+            state['model'] = self.model.state_dict()
+            file_path = f"{save_path}/{name}.pth"
+            torch.save(state, file_path)
+
+    def load_checkpoint(self, checkpoint):
+        if checkpoint is None:
+            import glob
+            checkpoint_list = sorted(glob.glob(f'{os.path.join(self.workspace, "checkpoints")}/{self.name}_ep*.pth'))
+            if checkpoint_list:
+                checkpoint = checkpoint_list[-1]
+                print(f"[INFO] Latest checkpoint is {checkpoint}")
+            else:
+                print("[WARN] No checkpoint found, model randomly initialized.")
+                return
+        checkpoint_dict = torch.load(checkpoint, map_location=self.device)
+        missing_keys, unexpected_keys = self.model.load_state_dict(checkpoint_dict['model'], strict=False)
+        print("[INFO] loaded model.")
+        if len(missing_keys) > 0:
+            print(f"[WARN] missing keys: {missing_keys}")
+        if len(unexpected_keys) > 0:
+            print(f"[WARN] unexpected keys: {unexpected_keys}")
+
     def train(self, train_dataset: NeRFDataset, valid_dataset: NeRFDataset, max_epochs: int):
 
         # mark untrained region (i.e., not covered by any camera from the training dataset)
@@ -73,8 +127,44 @@ class Trainer:
             self.epoch = epoch + 1
             self.train_one_epoch(data_loader=train_loader)
 
-    def evaluate(self, test_dataset: NeRFDataset, name: str):
+        self.save_checkpoint(full=True, best=False)
+
+    def evaluate(self, valid_dataset: NeRFDataset, name: str):
         pass
+
+    def test(self, test_dataset: NeRFDataset):
+        import numpy as np
+        import imageio
+        save_path = os.path.join(self.workspace, 'results')
+        os.makedirs(save_path, exist_ok=True)
+        name = f'{self.name}_ep{self.epoch:04d}'
+
+        all_preds = []
+        all_preds_depth = []
+
+        self.model.eval()
+        test_loader = test_dataset.dataloader()
+        with torch.no_grad():
+            for i, data in enumerate(tqdm.tqdm(test_loader)):
+                data: dict
+                with torch.amp.autocast('cuda', enabled=self.use_fp16):
+                    preds, preds_depth = self.test_step(data, bg_color=None)
+                if data['color_space'] == 'linear':
+                    preds = linear_to_srgb(preds)
+
+                pred = preds[0].detach().cpu().numpy()
+                pred = (pred * 255).astype(np.uint8)
+
+                pred_depth = preds_depth[0].detach().cpu().numpy()
+                pred_depth = (pred_depth * 255).astype(np.uint8)
+
+                all_preds.append(pred)
+                all_preds_depth.append(pred_depth)
+
+        all_preds = np.stack(all_preds, axis=0)
+        all_preds_depth = np.stack(all_preds_depth, axis=0)
+        imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
+        imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
     def train_one_epoch(self, data_loader: torch.utils.data.DataLoader):
         self.model.train()
@@ -157,3 +247,28 @@ class Trainer:
             raise NotImplementedError("Deform regularization not implemented")
 
         return pred_rgb, gt_rgb, loss
+
+    def test_step(self, data, bg_color):
+        rays_o = data['rays_o']  # [B, N, 3]
+        rays_d = data['rays_d']  # [B, N, 3]
+        time = data['time']  # [B, 1]
+        H, W = data['H'], data['W']
+
+        if bg_color is not None:
+            bg_color = bg_color.to(self.device)
+
+        outputs = self.model.render(
+            rays_o=rays_o,
+            rays_d=rays_d,
+            time=time,
+            dt_gamma=self.runtime_options['dt_gamma'],
+            bg_color=bg_color,
+            perturb=True,
+            force_all_rays=False,
+            max_steps=1024,
+        )
+
+        pred_rgb = outputs['image'].reshape(-1, H, W, 3)
+        pred_depth = outputs['depth'].reshape(-1, H, W)
+
+        return pred_rgb, pred_depth

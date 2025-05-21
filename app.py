@@ -2,6 +2,7 @@ from src import *
 import dataclasses
 import tyro
 
+
 @dataclasses.dataclass
 class AppConfig:
     train: TrainerConfig = dataclasses.field(default_factory=TrainerConfig)
@@ -11,12 +12,11 @@ class AppConfig:
 if __name__ == '__main__':
     cfg = tyro.cli(AppConfig)
     trainer = Trainer(config=cfg.train)
-    trainer.train(
-        train_dataset=NeRFDataset(config=cfg.dataset, type="train"),
-        valid_dataset=NeRFDataset(config=cfg.dataset, type="val"),
-        max_epochs=20,
-    )
-    # trainer.evaluate(
-    #     test_dataset=NeRFDataset(opt, dataset_type='test', num_rays=getattr(opt, 'num_rays'), device=device).dataloader(),
-    #     name="test",
+    # trainer.train(
+    #     train_dataset=NeRFDataset(config=cfg.dataset, type="train"),
+    #     valid_dataset=NeRFDataset(config=cfg.dataset, type="val"),
+    #     max_epochs=20,
     # )
+    trainer.test(
+        test_dataset=NeRFDataset(config=cfg.dataset, type="test"),
+    )
