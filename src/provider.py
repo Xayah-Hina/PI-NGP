@@ -1,3 +1,5 @@
+import dataclasses
+
 from .spatial import get_rays
 import torch
 import os
@@ -122,32 +124,56 @@ class DatasetPINGP(torch.utils.data.Dataset):
             scene_info = yaml.safe_load(f)
 
 
+@dataclasses.dataclass
+class NeRFDatasetConfig:
+    data_dir: str = dataclasses.field(default=os.path.abspath(os.path.join(os.getcwd(), 'data')), metadata={'help': 'data directory'})
+    dataset_dir: str = dataclasses.field(default='dnerf/standup', metadata={'help': 'base directory of dataset'})
+
+    camera_radius_scale: float = dataclasses.field(default=0.33, metadata={'help': 'scale camera location into box[-bound, bound]^3'})
+    camera_offset: list = dataclasses.field(default_factory=lambda: [0, 0, 0], metadata={'help': 'offset of camera location'})
+
+    use_error_map: bool = dataclasses.field(default=False, metadata={'help': 'use error map to sample rays'})
+    use_preload: bool = dataclasses.field(default=False, metadata={'help': 'preload all data into GPU, accelerate training but use more GPU memory'})
+    use_fp16: bool = dataclasses.field(default=False, metadata={'help': 'use amp mixed precision training'})
+
+    downscale: int = dataclasses.field(default=1, metadata={'help': 'downscale factor for images'})
+    color_space: str = dataclasses.field(default='srgb', metadata={'help': 'Color space, supports (linear, srgb)'})
+    num_rays: int = dataclasses.field(default=4096, metadata={'help': 'number of rays to sample per image'})
+
+    device: str = dataclasses.field(default='cuda:0', metadata={'help': 'device to use, usually setting to None is OK. (auto choose device)'})
+
+    def __post_init__(self):
+        if not os.path.exists(os.path.join(self.data_dir, self.dataset_dir)):
+            raise FileNotFoundError(f"Dataset directory {self.data_dir}/{self.dataset_dir} does not exist.")
+
+
 class NeRFDataset:
-    def __init__(self, opt, dataset_type: typing.Literal['train', 'val', 'test'], num_rays: int, device: torch.device):
-        if os.path.exists(os.path.join(getattr(opt, 'data_dir'), getattr(opt, 'dataset_dir'), 'transforms.json')):
-            self.mode = 'colmap'
+    def __init__(self, config: NeRFDatasetConfig, type: typing.Literal['train', 'val', 'test']):
+        base_dataset_dir = os.path.join(config.data_dir, config.dataset_dir)
+        if os.path.exists(os.path.join(base_dataset_dir, 'transforms.json')):
             raise NotImplementedError('[NOT IMPLEMENTED] DatasetColmap')
-        elif os.path.exists(os.path.join(getattr(opt, 'data_dir'), getattr(opt, 'dataset_dir'), 'transforms_train.json')):
+        elif os.path.exists(os.path.join(base_dataset_dir, 'transforms_train.json')):
             self.mode = 'blender'
             self.dataset = DatasetBlender(
-                dataset_path=os.path.join(getattr(opt, 'data_dir'), getattr(opt, 'dataset_dir')),
-                dataset_type=dataset_type, downscale=1,
-                camera_radius_scale=getattr(opt, 'camera_radius_scale'),
-                camera_offset=getattr(opt, 'camera_offset'),
-                use_error_map=getattr(opt, 'error_map'),
-                use_preload=getattr(opt, 'preload'),
-                use_fp16=getattr(opt, 'fp16'),
-                color_space=getattr(opt, 'color_space'),
-                device=device,
+                dataset_path=base_dataset_dir,
+                dataset_type=type,
+                downscale=config.downscale,
+                camera_radius_scale=config.camera_radius_scale,
+                camera_offset=config.camera_offset,
+                use_error_map=config.use_error_map,
+                use_preload=config.use_preload,
+                use_fp16=config.use_fp16,
+                color_space=config.color_space,
+                device=torch.device(config.device),
             )
-        elif os.path.exists(os.path.join(getattr(opt, 'data_dir'), getattr(opt, 'dataset_dir'), 'scene_info.yaml')):
+        elif os.path.exists(os.path.join(base_dataset_dir, 'scene_info.yaml')):
             self.mode = 'pi-ngp'
             raise NotImplementedError('[NOT IMPLEMENTED] DatasetPINGP')
         else:
-            raise NotImplementedError('[INVALID DATASET TYPE] NeRFDataset: {}'.format(opt.dataset_dir))
-        self.num_rays = num_rays
-        self.dataset_type = dataset_type
-        self.device = device
+            raise NotImplementedError('[INVALID DATASET TYPE] NeRFDataset at: {}'.format(base_dataset_dir))
+        self.type = type
+        self.num_rays = config.num_rays
+        self.device = torch.device(config.device)
 
     def collate(self, batch: list):
         B = len(batch)  # a list of length 1
@@ -161,7 +187,7 @@ class NeRFDataset:
         images = torch.stack([item['image'] for item in batch], dim=0) if self.dataset.images is not None else None
         if images is not None:
             images = images.to(self.device)  # [B, H, W, 3/4]
-            if self.dataset_type == 'train':
+            if self.type == 'train':
                 C = images.shape[-1]
                 images = torch.gather(images.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1))  # [B, N, 3/4]
         results = {

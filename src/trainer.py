@@ -1,6 +1,8 @@
 from .network import NeRFNetworkBasis
 from .provider import NeRFDataset
 import torch
+import dataclasses
+import typing
 
 
 @torch.jit.script
@@ -8,26 +10,36 @@ def srgb_to_linear(x):
     return torch.where(x < 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
 
 
+@dataclasses.dataclass
+class TrainerConfig:
+    mode: typing.Literal["train", "test"] = dataclasses.field(default="train", metadata={"help": "mode of training"})
+    name: str = dataclasses.field(default="default name", metadata={"help": "name of the experiment"})
+    model: typing.Literal["dnerf", "nerf", "mipnerf"] = dataclasses.field(default="dnerf", metadata={"help": "model type"})
+
+    lr_encoding: float = dataclasses.field(default=1e-2, metadata={"help": "initial learning rate for encoding"})
+    lr_net: float = dataclasses.field(default=1e-3, metadata={"help": "initial learning rate for network"})
+
+    use_fp16: bool = dataclasses.field(default=False, metadata={"help": "use amp mixed precision training"})
+    device: str = dataclasses.field(default="cuda:0", metadata={"help": "device to use, usually setting to None is OK. (auto choose device)"})
+
+
 class Trainer:
-    def __init__(self,
-                 name: str,
-                 lr_encoding: float,
-                 lr_net: float,
-                 use_fp16: bool,
-                 device
-                 ):
-        self.name = name
-        self.model = NeRFNetworkBasis(
-            encoding_spatial='tiledgrid',
-            encoding_dir='sphere_harmonics',
-            encoding_time='frequency',
-            encoding_bg='hashgrid',
-            bound=1,
-        )
-        self.optimizer = torch.optim.Adam(self.model.get_params(lr_encoding, lr_net), betas=(0.9, 0.99), eps=1e-15)
+    def __init__(self, config: TrainerConfig):
+        self.name = config.name
+        if config.model == 'dnerf':
+            self.model = NeRFNetworkBasis(
+                encoding_spatial='tiledgrid',
+                encoding_dir='sphere_harmonics',
+                encoding_time='frequency',
+                encoding_bg='hashgrid',
+                bound=1,
+            )
+        else:
+            raise NotImplementedError(f"Model {config.model} not implemented")
+        self.optimizer = torch.optim.Adam(self.model.get_params(config.lr_encoding, config.lr_net), betas=(0.9, 0.99), eps=1e-15)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda epoch: 1)  # TODO: implement a proper scheduler
-        self.use_fp16 = use_fp16
-        self.device = device
+        self.use_fp16 = config.use_fp16
+        self.device = config.device
 
         self.epoch = 0
         self.global_step = 0
@@ -84,6 +96,17 @@ class Trainer:
             gt_rgb = images[..., :3] * images[..., 3:] + bg_color * (1 - images[..., 3:])
         else:
             gt_rgb = images
+
+        # outputs = self.model.render(
+        #     rays_o=rays_o,
+        #     rays_d=rays_d,
+        #     time=time,
+        #     dt_gamma=dt_gamma,
+        #     bg_color=bg_color,
+        #     perturb=perturb,
+        #     force_all_rays=force_all_rays,
+        #     max_steps=max_steps,
+        # )
 
     def to(self, device):
         self.model.to(device)

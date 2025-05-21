@@ -174,7 +174,7 @@ class NeRFRenderer(torch.nn.Module):
             self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
         self.local_step = 0
 
-        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128**3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
+        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
 
     def run_cuda(self, rays_o, rays_d, time, dt_gamma=0, bg_color=None, perturb=False, force_all_rays=False, max_steps=1024):
         """
@@ -213,7 +213,36 @@ class NeRFRenderer(torch.nn.Module):
         results = {}
 
         if self.training:
-            pass
+            # setup counter
+            counter = self.step_counter[self.local_step % 16]
+            counter.zero_()  # set to 0
+            self.local_step += 1
+
+            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield[t], self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
+
+            # plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
+
+            sigmas, rgbs, deform = self(xyzs, dirs, time)
+            # density_outputs = self.density(xyzs, time) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
+            # sigmas = density_outputs['sigma']
+            # rgbs = self.color(xyzs, dirs, **density_outputs)
+            sigmas = self.density_scale * sigmas
+
+            # print(f'valid RGB query ratio: {mask.sum().item() / mask.shape[0]} (total = {mask.sum().item()})')
+
+            weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays)
+            image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
+            depth = torch.clamp(depth - nears, min=0) / (fars - nears)
+            image = image.view(*prefix, 3)
+            depth = depth.view(*prefix)
+
+            results['deform'] = deform
+        else:
+            raise NotImplementedError('evaluation is not implemented in NeRFRenderer, please implement it in your own model.')
+
+        results['depth'] = depth
+        results['image'] = image
+        return results
 
     @torch.no_grad()
     def mark_untrained_grid(self, poses, intrinsics, S=64):
@@ -279,6 +308,22 @@ class NeRFRenderer(torch.nn.Module):
         self.density_grid[count.unsqueeze(0).expand_as(self.density_grid) == 0] = -1
 
         print(f'[mark untrained grid] {(count == 0).sum()} from {self.grid_size ** 3 * self.cascade}')
+
+    def render(self, rays_o, rays_d, time, dt_gamma, bg_color, perturb, force_all_rays, max_steps):
+        if self.cuda_ray:
+            results = self.run_cuda(
+                rays_o=rays_o,
+                rays_d=rays_d,
+                time=time,
+                dt_gamma=dt_gamma,
+                bg_color=bg_color,
+                perturb=perturb,
+                force_all_rays=force_all_rays,
+                max_steps=max_steps,
+            )
+        else:
+            raise NotImplementedError('NeRFRenderer.render() is not implemented for non-cuda-ray mode.')
+        return results
 
 
 class NeRFNetworkBasis(NeRFRenderer):
