@@ -122,10 +122,38 @@ class Trainer:
 
         self.error_map = train_dataset.dataset.error_map
 
+        self.model.train()
         train_loader = train_dataset.dataloader()
         for epoch in range(self.epoch, max_epochs):
             self.epoch = epoch + 1
-            self.train_one_epoch(data_loader=train_loader)
+
+            total_loss = 0
+            self.local_step = 0
+            for i, data in enumerate(tqdm.tqdm(train_loader)):
+                self.global_step += 1
+                self.local_step += 1
+                # update grid every 16 steps
+                if self.model.cuda_ray and self.global_step % 200 == 0:
+                    with torch.amp.autocast('cuda', enabled=self.use_fp16):
+                        self.model.update_extra_state()
+
+                self.optimizer.zero_grad()
+                with torch.amp.autocast('cuda', enabled=self.use_fp16):
+                    preds, truths, loss = self.train_step(data)
+
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+
+                self.lr_scheduler.step()
+                loss_val = loss.item()
+                total_loss += loss_val
+
+            if self.ema is not None:
+                self.ema.update()
+
+            average_loss = total_loss / self.local_step
+            print(f"Epoch {self.epoch}, Loss: {average_loss:.4f}")
 
         self.save_checkpoint(full=True, best=False)
 
@@ -165,37 +193,6 @@ class Trainer:
         all_preds_depth = np.stack(all_preds_depth, axis=0)
         imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
         imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
-
-    def train_one_epoch(self, data_loader: torch.utils.data.DataLoader):
-        self.model.train()
-
-        total_loss = 0
-        self.local_step = 0
-        for i, data in enumerate(tqdm.tqdm(data_loader)):
-            self.global_step += 1
-            self.local_step += 1
-            # update grid every 16 steps
-            if self.model.cuda_ray and self.global_step % 200 == 0:
-                with torch.amp.autocast('cuda', enabled=self.use_fp16):
-                    self.model.update_extra_state()
-
-            self.optimizer.zero_grad()
-            with torch.amp.autocast('cuda', enabled=self.use_fp16):
-                preds, truths, loss = self.train_step(data)
-
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-
-            self.lr_scheduler.step()
-            loss_val = loss.item()
-            total_loss += loss_val
-
-        if self.ema is not None:
-            self.ema.update()
-
-        average_loss = total_loss / self.local_step
-        print(f"Epoch {self.epoch}, Loss: {average_loss:.4f}")
 
     def train_step(self, data):
         rays_o = data['rays_o']  # [B, N, 3]

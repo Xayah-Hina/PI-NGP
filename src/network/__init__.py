@@ -1,1 +1,1 @@
-from .dnerf import NeRFNetworkBasis
+from .basis import NeRFNetworkBasis
