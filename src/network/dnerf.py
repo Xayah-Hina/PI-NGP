@@ -449,7 +449,7 @@ class NeRFNetworkBasis(NeRFRenderer):
         color_basis = h[0, sigma_basis_dim:]
 
         # sigma
-        x = self.encoder(x, bound=bound)
+        x = self.encoder_spatial(x, bound=bound)
         h = x
         for l in range(num_layers):
             h = self.sigma_net[l](h)
