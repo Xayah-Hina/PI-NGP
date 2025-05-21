@@ -190,7 +190,12 @@ class Trainer:
             for i, data in enumerate(tqdm.tqdm(test_loader)):
                 data: dict
                 with torch.amp.autocast('cuda', enabled=self.use_fp16):
-                    preds, preds_depth = self.test_step_dynamics(data, bg_color=None)
+                    if isinstance(self.model, NeRFRendererStatic):
+                        preds, preds_depth = self.test_step_static(data, bg_color=None)
+                    elif isinstance(self.model, NeRFRendererDynamic):
+                        preds, preds_depth = self.test_step_dynamics(data, bg_color=None)
+                    else:
+                        raise NotImplementedError(f"Model {self.model.__class__.__name__} not implemented")
                 if data['color_space'] == 'linear':
                     preds = linear_to_srgb(preds)
 
