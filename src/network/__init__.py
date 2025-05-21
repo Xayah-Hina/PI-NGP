@@ -1,2 +1,2 @@
-from .ngp import NeRFNetworkNGP
-from .basis import NeRFNetworkBasis
+from .ngp import NeRFNetworkNGP, NeRFRendererStatic
+from .basis import NeRFNetworkBasis, NeRFRendererDynamic

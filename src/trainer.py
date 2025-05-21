@@ -1,4 +1,4 @@
-from .network import NeRFNetworkNGP, NeRFNetworkBasis
+from .network import NeRFNetworkNGP, NeRFNetworkBasis, NeRFRendererStatic, NeRFRendererDynamic
 from .provider import NeRFDataset
 import torch
 import torch.utils.tensorboard
@@ -33,8 +33,8 @@ class TrainerConfig:
     lr_net: float = dataclasses.field(default=1e-3, metadata={"help": "initial learning rate for network"})
     ema_decay: float = dataclasses.field(default=0.95, metadata={"help": "decay rate for exponential moving average"})
 
-    use_fp16: bool = dataclasses.field(default=False, metadata={"help": "use amp mixed precision training"})
-    preload: bool = dataclasses.field(default=False, metadata={"help": "preload all data into GPU, accelerate training but use more GPU memory"})
+    use_fp16: bool = dataclasses.field(default=True, metadata={"help": "use amp mixed precision training"})
+    preload: bool = dataclasses.field(default=True, metadata={"help": "preload all data into GPU, accelerate training but use more GPU memory"})
     device: str = dataclasses.field(default="cuda:0", metadata={"help": "device to use, usually setting to None is OK. (auto choose device)"})
 
     dt_gamma: float = dataclasses.field(default=1 / 128, metadata={"help": "dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)"})
@@ -148,7 +148,12 @@ class Trainer:
 
                 self.optimizer.zero_grad()
                 with torch.amp.autocast('cuda', enabled=self.use_fp16):
-                    preds, truths, loss = self.train_step(data)
+                    if isinstance(self.model, NeRFRendererStatic):
+                        preds, truths, loss = self.train_step_static(data)
+                    elif isinstance(self.model, NeRFRendererDynamic):
+                        preds, truths, loss = self.train_step_dynamics(data)
+                    else:
+                        raise NotImplementedError(f"Model {self.model.__class__.__name__} not implemented")
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -169,9 +174,6 @@ class Trainer:
 
         self.save_checkpoint(full=True, best=False)
 
-    def evaluate(self, valid_dataset: NeRFDataset, name: str):
-        pass
-
     def test(self, test_dataset: NeRFDataset):
         import numpy as np
         import imageio
@@ -188,7 +190,7 @@ class Trainer:
             for i, data in enumerate(tqdm.tqdm(test_loader)):
                 data: dict
                 with torch.amp.autocast('cuda', enabled=self.use_fp16):
-                    preds, preds_depth = self.test_step(data, bg_color=None)
+                    preds, preds_depth = self.test_step_dynamics(data, bg_color=None)
                 if data['color_space'] == 'linear':
                     preds = linear_to_srgb(preds)
 
@@ -206,7 +208,53 @@ class Trainer:
         imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
         imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
-    def train_step(self, data):
+    def train_step_static(self, data):
+        rays_o = data['rays_o']  # [B, N, 3]
+        rays_d = data['rays_d']  # [B, N, 3]
+        images = data['images']  # [B, N, 3/4]
+        color_space = data['color_space']
+        B, N, C = images.shape
+
+        if color_space == 'linear':
+            images[..., :3] = srgb_to_linear(images[..., :3])
+
+        if C == 3 or self.model.runtime_params['bg_radius'] > 0:
+            bg_color = 1
+        # train with random background color if not using a bg model and has alpha channel.
+        else:
+            # bg_color = torch.ones(3, device=self.device) # [3], fixed white background
+            # bg_color = torch.rand(3, device=self.device) # [3], frame-wise random.
+            bg_color = torch.rand_like(images[..., :3])  # [N, 3], pixel-wise random.
+
+        if C == 4:
+            gt_rgb = images[..., :3] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+        else:
+            gt_rgb = images
+
+        outputs = self.model.render_static(
+            rays_o=rays_o,
+            rays_d=rays_d,
+            dt_gamma=self.runtime_options['dt_gamma'],
+            bg_color=bg_color,
+            perturb=True,
+            force_all_rays=False,
+            max_steps=1024,
+            T_thresh=1e-4,
+        )
+
+        pred_rgb = outputs['image']
+
+        loss = self.criterion(pred_rgb, gt_rgb).mean(-1)  # [B, N, 3] --> [B, N]
+
+        # update error_map
+        if self.error_map is not None:
+            raise NotImplementedError("Error map update not implemented")
+
+        loss = loss.mean()
+
+        return pred_rgb, gt_rgb, loss
+
+    def train_step_dynamics(self, data):
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
         time = data['time']  # [B, 1]
@@ -230,7 +278,7 @@ class Trainer:
         else:
             gt_rgb = images
 
-        outputs = self.model.render(
+        outputs = self.model.render_dynamics(
             rays_o=rays_o,
             rays_d=rays_d,
             time=time,
@@ -257,7 +305,31 @@ class Trainer:
 
         return pred_rgb, gt_rgb, loss
 
-    def test_step(self, data, bg_color):
+    def test_step_static(self, data, bg_color):
+        rays_o = data['rays_o']  # [B, N, 3]
+        rays_d = data['rays_d']  # [B, N, 3]
+        H, W = data['H'], data['W']
+
+        if bg_color is not None:
+            bg_color = bg_color.to(self.device)
+
+        outputs = self.model.render_static(
+            rays_o=rays_o,
+            rays_d=rays_d,
+            dt_gamma=self.runtime_options['dt_gamma'],
+            bg_color=bg_color,
+            perturb=True,
+            force_all_rays=False,
+            max_steps=1024,
+            T_thresh=1e-4,
+        )
+
+        pred_rgb = outputs['image'].reshape(-1, H, W, 3)
+        pred_depth = outputs['depth'].reshape(-1, H, W)
+
+        return pred_rgb, pred_depth
+
+    def test_step_dynamics(self, data, bg_color):
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
         time = data['time']  # [B, 1]
@@ -266,7 +338,7 @@ class Trainer:
         if bg_color is not None:
             bg_color = bg_color.to(self.device)
 
-        outputs = self.model.render(
+        outputs = self.model.render_dynamics(
             rays_o=rays_o,
             rays_d=rays_d,
             time=time,

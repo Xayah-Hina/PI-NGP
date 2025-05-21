@@ -332,7 +332,7 @@ class NeRFRendererStatic(torch.nn.Module):
 
         return results
 
-    def render(self, rays_o, rays_d, dt_gamma, bg_color, perturb, force_all_rays, max_steps, T_thresh):
+    def render_static(self, rays_o, rays_d, dt_gamma, bg_color, perturb, force_all_rays, max_steps, T_thresh):
         if self.runtime_params['cuda_ray']:
             results = self.run_cuda(
                 rays_o=rays_o,
@@ -702,7 +702,7 @@ class NeRFRendererDynamic(torch.nn.Module):
         results['image'] = image
         return results
 
-    def render(self, rays_o, rays_d, time, dt_gamma, bg_color, perturb, force_all_rays, max_steps):
+    def render_dynamics(self, rays_o, rays_d, time, dt_gamma, bg_color, perturb, force_all_rays, max_steps):
         if self.runtime_params['cuda_ray']:
             results = self.run_cuda(
                 rays_o=rays_o,

@@ -135,8 +135,8 @@ class NeRFDatasetConfig:
     camera_offset: list = dataclasses.field(default_factory=lambda: [0, 0, 0], metadata={'help': 'offset of camera location'})
 
     use_error_map: bool = dataclasses.field(default=False, metadata={'help': 'use error map to sample rays'})
-    use_preload: bool = dataclasses.field(default=False, metadata={'help': 'preload all data into GPU, accelerate training but use more GPU memory'})
-    use_fp16: bool = dataclasses.field(default=False, metadata={'help': 'use amp mixed precision training'})
+    use_preload: bool = dataclasses.field(default=True, metadata={'help': 'preload all data into GPU, accelerate training but use more GPU memory'})
+    use_fp16: bool = dataclasses.field(default=True, metadata={'help': 'use amp mixed precision training'})
 
     downscale: int = dataclasses.field(default=1, metadata={'help': 'downscale factor for images'})
     color_space: str = dataclasses.field(default='srgb', metadata={'help': 'Color space, supports (linear, srgb)'})
