@@ -1,6 +1,7 @@
-from .network import NeRFNetworkBasis
+from .network import NeRFNetworkNGP, NeRFNetworkBasis
 from .provider import NeRFDataset
 import torch
+import torch.utils.tensorboard
 import torch_ema
 import tqdm
 import dataclasses
@@ -20,19 +21,22 @@ def srgb_to_linear(x):
 
 @dataclasses.dataclass
 class TrainerConfig:
+    # required options
+    model: typing.Literal["ngp", "basis"] = dataclasses.field(metadata={"help": "model type"})
+
+    # optional options
     name: str = dataclasses.field(default="default name", metadata={"help": "name of the experiment"})
     workspace: str = dataclasses.field(default="workspace", metadata={"help": "workspace directory"})
     mode: typing.Literal["train", "test"] = dataclasses.field(default="train", metadata={"help": "mode of training"})
-    model: typing.Literal["dnerf", "nerf", "mipnerf"] = dataclasses.field(default="dnerf", metadata={"help": "model type"})
 
     lr_encoding: float = dataclasses.field(default=1e-2, metadata={"help": "initial learning rate for encoding"})
     lr_net: float = dataclasses.field(default=1e-3, metadata={"help": "initial learning rate for network"})
     ema_decay: float = dataclasses.field(default=0.95, metadata={"help": "decay rate for exponential moving average"})
 
     use_fp16: bool = dataclasses.field(default=False, metadata={"help": "use amp mixed precision training"})
+    preload: bool = dataclasses.field(default=False, metadata={"help": "preload all data into GPU, accelerate training but use more GPU memory"})
     device: str = dataclasses.field(default="cuda:0", metadata={"help": "device to use, usually setting to None is OK. (auto choose device)"})
 
-    ### runtime options
     dt_gamma: float = dataclasses.field(default=1 / 128, metadata={"help": "dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)"})
 
 
@@ -40,22 +44,27 @@ class Trainer:
     def __init__(self, config: TrainerConfig):
         self.name = config.name
         self.workspace = config.workspace
-        if config.model == 'dnerf':
+        if config.model == 'ngp':
+            self.model = NeRFNetworkNGP(
+                encoding_spatial='hashgrid',
+                encoding_dir='sphere_harmonics',
+                encoding_bg='hashgrid',
+            ).to(config.device)
+        elif config.model == 'basis':
             self.model = NeRFNetworkBasis(
                 encoding_spatial='tiledgrid',
                 encoding_dir='sphere_harmonics',
                 encoding_time='frequency',
                 encoding_bg='hashgrid',
-                bound=1,
-            )
+            ).to(config.device)
         else:
             raise NotImplementedError(f"Model {config.model} not implemented")
-        self.model.to(config.device)
         self.optimizer = torch.optim.Adam(self.model.get_params(config.lr_encoding, config.lr_net), betas=(0.9, 0.99), eps=1e-15)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda epoch: 1)  # TODO: implement a proper scheduler
         self.criterion = torch.nn.MSELoss(reduction='none')
         self.scaler = torch.amp.GradScaler('cuda', enabled=config.use_fp16)
         self.ema = torch_ema.ExponentialMovingAverage(self.model.parameters(), decay=config.ema_decay)
+        self.writer = torch.utils.tensorboard.SummaryWriter(os.path.join(self.workspace, "run", self.name))
         self.error_map = None  # Placeholder for error map, if needed
         self.use_fp16 = config.use_fp16
         self.device = config.device
@@ -148,6 +157,9 @@ class Trainer:
                 self.lr_scheduler.step()
                 loss_val = loss.item()
                 total_loss += loss_val
+
+                self.writer.add_scalar("train/loss", loss_val, self.global_step)
+                self.writer.add_scalar("train/lr", self.optimizer.param_groups[0]['lr'], self.global_step)
 
             if self.ema is not None:
                 self.ema.update()

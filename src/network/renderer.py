@@ -3,7 +3,7 @@ import torch
 import math
 
 
-class NeRFRenderer(torch.nn.Module):
+class NeRFRendererStatic(torch.nn.Module):
     def __init__(self,
                  cuda_ray=False,
                  bound=1,

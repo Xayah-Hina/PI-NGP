@@ -1,11 +1,11 @@
-from .renderer import NeRFRenderer
+from .renderer import NeRFRendererStatic
 from ..encoder import get_encoder
 from .activation import trunc_exp
 import torch
 import typing
 
 
-class NeRFNetwork(NeRFRenderer):
+class NeRFNetworkNGP(NeRFRendererStatic):
     def __init__(self,
                  encoding_spatial: typing.Literal['None', 'frequency', 'sphere_harmonics', 'hashgrid', 'tiledgrid', 'ash'],
                  encoding_dir: typing.Literal['None', 'frequency', 'sphere_harmonics', 'hashgrid', 'tiledgrid', 'ash'],
@@ -19,7 +19,9 @@ class NeRFNetwork(NeRFRenderer):
                  hidden_dim_bg=64,
                  bound=1,
                  ):
-        super().__init__()
+        super().__init__(
+            cuda_ray=True,
+        )
 
         # sigma network
         self.encoder_spatial = get_encoder(encoding_spatial, desired_resolution=2048 * bound)

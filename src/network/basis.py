@@ -26,8 +26,6 @@ class NeRFNetworkBasis(NeRFRendererDynamic):
                  ):
         super().__init__(
             cuda_ray=True,
-            bound=bound,
-            bg_radius=-1,
         )
 
         # basis network
