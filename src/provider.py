@@ -126,8 +126,8 @@ class DatasetPINGP(torch.utils.data.Dataset):
 
 @dataclasses.dataclass
 class NeRFDatasetConfig:
+    dataset_dir: str = dataclasses.field(metadata={'help': 'base directory of dataset'})
     data_dir: str = dataclasses.field(default=os.path.abspath(os.path.join(os.getcwd(), 'data')), metadata={'help': 'data directory'})
-    dataset_dir: str = dataclasses.field(default='dnerf/standup', metadata={'help': 'base directory of dataset'})
 
     camera_radius_scale: float = dataclasses.field(default=0.33, metadata={'help': 'scale camera location into box[-bound, bound]^3'})
     camera_offset: list = dataclasses.field(default_factory=lambda: [0, 0, 0], metadata={'help': 'offset of camera location'})
