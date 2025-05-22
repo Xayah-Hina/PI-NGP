@@ -202,13 +202,11 @@ class Trainer:
                 pred = preds[0].detach().cpu().numpy()
                 pred = (pred * 255).astype(np.uint8)
 
-                gt_rgb: torch.Tensor
                 if gt_rgb is not None:
-                    gt_rgb_valid = gt_rgb[0].detach().cpu()
+                    gt = gt_rgb[0].detach().cpu().numpy()
                 else:
-                    gt_rgb_valid = torch.zeros_like(pred)
+                    gt = np.zeros_like(pred)
 
-                gt = gt_rgb_valid.numpy()
                 gt = (gt * 255).astype(np.uint8)
 
                 pred_bgr = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
