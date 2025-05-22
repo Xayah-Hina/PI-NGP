@@ -343,7 +343,7 @@ class Trainer:
         pred_depth = outputs['depth'].reshape(-1, H, W)
 
         gt_rgb = None
-        if 'images' in data:
+        if 'images' in data and data['images'] is not None:
             images = data['images']
             color_space = data['color_space']
             B, H, W, C = images.shape
@@ -380,7 +380,7 @@ class Trainer:
         pred_depth = outputs['depth'].reshape(-1, H, W)
 
         gt_rgb = None
-        if 'images' in data:
+        if 'images' in data and data['images'] is not None:
             images = data['images']
             color_space = data['color_space']
             B, H, W, C = images.shape
