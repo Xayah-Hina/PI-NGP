@@ -1,4 +1,4 @@
-from .network import NeRFNetworkNGP, NeRFNetworkBasis, NeRFRendererStatic, NeRFRendererDynamic
+from .network import NeRFNetworkNGP, NeRFNetworkBasis, NeRFRendererStatic, NeRFRendererDynamic, NeRFHyFluidSmall
 from .dataset import NeRFDataset
 import torch
 import torch.utils.tensorboard
@@ -22,7 +22,7 @@ def srgb_to_linear(x):
 @dataclasses.dataclass
 class TrainerConfig:
     # required options
-    model: typing.Literal["ngp", "basis"] = dataclasses.field(metadata={"help": "model type"})
+    model: typing.Literal["ngp", "basis", 'hyfluid'] = dataclasses.field(metadata={"help": "model type"})
 
     # optional options
     name: str = dataclasses.field(default="default name", metadata={"help": "name of the experiment"})
@@ -55,6 +55,10 @@ class Trainer:
                 encoding_dir='sphere_harmonics',
                 encoding_time='frequency',
                 encoding_bg='hashgrid',
+            ).to(config.device)
+        elif config.model == 'hyfluid':
+            self.model = NeRFHyFluidSmall(
+                encoding_pinf='hyfluid',
             ).to(config.device)
         else:
             raise NotImplementedError(f"Model {config.model} not implemented")

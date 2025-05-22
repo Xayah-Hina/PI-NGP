@@ -1,0 +1,29 @@
+training_videos:
+  - data/hyfluid/train00.mp4
+  - data/hyfluid/train01.mp4
+  - data/hyfluid/train02.mp4
+  - data/hyfluid/train03.mp4
+  - data/hyfluid/train04.mp4
+
+validation_videos:
+  - data/hyfluid/train02.mp4
+
+training_camera_calibrations:
+  - data/hyfluid/cam_train00.npz
+  - data/hyfluid/cam_train01.npz
+  - data/hyfluid/cam_train02.npz
+  - data/hyfluid/cam_train03.npz
+  - data/hyfluid/cam_train04.npz
+
+validation_camera_calibrations:
+  - data/hyfluid/cam_train02.npz
+
+voxel_transform:
+  - [ 1.0, 0.0, 7.5497901e-08, 0.081816666 ]
+  - [ 0.0, 1.0, 0.0, -0.044627272 ]
+  - [ 7.5497901e-08, 0.0, -1.0, -0.0049089999 ]
+  - [ 0.0, 0.0, 0.0, 1.0 ]
+
+voxel_scale: [ 0.4909, 0.73635, 0.4909 ]
+s_min: [ 0.15, 0.0, 0.15 ]
+s_max: [ 0.85, 1.0, 0.85 ]

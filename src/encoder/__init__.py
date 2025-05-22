@@ -1,6 +1,7 @@
 from .freqencoder import FreqEncoder
 from .gridencoder import GridEncoder
 from .shencoder import SHEncoder
+from .hyfluidcoder import HashEncoderNativeFasterBackward
 
 
 def get_encoder(encoding,
@@ -29,6 +30,9 @@ def get_encoder(encoding,
 
     elif encoding == 'tiledgrid':
         encoder = GridEncoder(input_dim=input_dim, num_levels=num_levels, level_dim=level_dim, base_resolution=base_resolution, log2_hashmap_size=log2_hashmap_size, desired_resolution=desired_resolution, gridtype='tiled', align_corners=align_corners)
+
+    elif encoding == 'hyfluid':
+        encoder = HashEncoderNativeFasterBackward(num_levels=num_levels, min_res=base_resolution, max_res=128, log2_hashmap_size=log2_hashmap_size, features_per_level=level_dim)
 
     else:
         raise NotImplementedError('Unknown encoding mode, choose from [None, frequency, sphere_harmonics, hashgrid, tiledgrid]')
