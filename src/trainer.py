@@ -221,7 +221,6 @@ class Trainer:
         imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_rgb_side_by_side, fps=25, quality=8, macro_block_size=1)
         imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
-    @torch.compile
     def train_step_static(self, data):
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
@@ -268,7 +267,6 @@ class Trainer:
 
         return pred_rgb, gt_rgb, loss
 
-    @torch.compile
     def train_step_dynamics(self, data):
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
