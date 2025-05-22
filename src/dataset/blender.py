@@ -98,7 +98,7 @@ class DatasetBlender(torch.utils.data.Dataset):
             if self.error_map is not None:
                 self.error_map = self.error_map.to(device)
 
-        info = f"{self.__class__.__name__}({len(self.images)} images, {self.width}x{self.height}, {self.color_space}, radius={self.radius:.2f}, fl_x={self.intrinsics[0]:.2f}, fl_y={self.intrinsics[1]:.2f}, cx={self.intrinsics[2]:.2f}, cy={self.intrinsics[3]:.2f}, {self.dtype})"
+        info = f"{self.__class__.__name__}({len(self.images) if self.images is not None else 0} images, {self.width}x{self.height}, {self.color_space}, radius={self.radius:.2f}, fl_x={self.intrinsics[0]:.2f}, fl_y={self.intrinsics[1]:.2f}, cx={self.intrinsics[2]:.2f}, cy={self.intrinsics[3]:.2f}, {self.dtype})"
         print(f"Loaded: {info}")
 
     def __len__(self):

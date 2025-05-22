@@ -224,7 +224,7 @@ class NeRFRendererStatic(torch.nn.Module):
             self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
         self.local_step = 0
 
-        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.runtime_params["cascade"]):.3f} | [step counter] mean={self.mean_count}')
+        # print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.runtime_params["cascade"]):.3f} | [step counter] mean={self.mean_count}')
 
     def run_cuda(self, rays_o, rays_d, dt_gamma, bg_color, perturb, force_all_rays, max_steps, T_thresh):
         prefix = rays_o.shape[:-1]
@@ -520,7 +520,7 @@ class NeRFRendererDynamic(torch.nn.Module):
             self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
         self.local_step = 0
 
-        print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.runtime_params["cascade"]):.3f} | [step counter] mean={self.mean_count}')
+        # print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128 ** 3 * self.runtime_params["cascade"]):.3f} | [step counter] mean={self.mean_count}')
 
     @torch.no_grad()
     def mark_untrained_grid(self, poses, intrinsics, S=64):
