@@ -15,7 +15,7 @@ class DatasetBlender(torch.utils.data.Dataset):
                  use_preload: bool,
                  use_fp16: float,
                  color_space: str,
-                 device: torch.device
+                 device: torch.device,
                  ):
         import numpy as np
         import cv2
@@ -40,7 +40,7 @@ class DatasetBlender(torch.utils.data.Dataset):
         with open(os.path.join(dataset_path, 'transforms_' + dataset_type + '.json'), 'r') as json_file:
             transform = json.load(json_file)
             for f in tqdm.tqdm(transform['frames'], desc=f'[Loading {self.__class__.__name__}...] ({dataset_type})'):
-                filepath = os.path.abspath(os.path.normpath(os.path.join(dataset_path, f['file_path'], '.png')))
+                filepath = os.path.abspath(os.path.normpath(os.path.join(dataset_path, f['file_path'] + '.png')))
                 if not os.path.exists(filepath):
                     continue
                 image = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)  # [H, W, 3] o [H, W, 4]
@@ -91,7 +91,8 @@ class DatasetBlender(torch.utils.data.Dataset):
             self.error_map = None
 
         if use_preload:
-            self.images = self.images.to().to(device)
+            if self.images is not None:
+                self.images = self.images.to(self.dtype).to(device)
             self.poses = self.poses.to(device)
             if self.times is not None:
                 self.times = self.times.to(device)

@@ -96,7 +96,14 @@ class NeRFDataset:
             )
         elif os.path.exists(os.path.join(base_dataset_dir, 'scene_info.yaml')):
             self.mode = 'pi-ngp'
-            raise NotImplementedError('[NOT IMPLEMENTED] DatasetPINGP')
+            self.dataset = DatasetPINGP(
+                dataset_path=base_dataset_dir,
+                dataset_type=dataset_type,
+                downscale=config.downscale,
+                use_preload=config.use_preload,
+                use_fp16=config.use_fp16,
+                device=torch.device(config.device),
+            )
         else:
             raise NotImplementedError('[INVALID DATASET TYPE] NeRFDataset at: {}'.format(base_dataset_dir))
         self.dataset_type = dataset_type

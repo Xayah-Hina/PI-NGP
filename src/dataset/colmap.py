@@ -15,7 +15,7 @@ class DatasetColmap(torch.utils.data.Dataset):
                  use_preload: bool,
                  use_fp16: float,
                  color_space: str,
-                 device: torch.device
+                 device: torch.device,
                  ):
         import numpy as np
         import cv2
@@ -135,7 +135,7 @@ class DatasetColmap(torch.utils.data.Dataset):
 
         if use_preload:
             if self.images is not None:
-                self.images = self.images.to().to(device)
+                self.images = self.images.to(self.dtype).to(device)
             self.poses = self.poses.to(device)
             if self.times is not None:
                 self.times = self.times.to(device)
