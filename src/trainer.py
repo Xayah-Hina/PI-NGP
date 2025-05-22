@@ -59,7 +59,7 @@ class Trainer:
         else:
             raise NotImplementedError(f"Model {config.model} not implemented")
         self.optimizer = torch.optim.Adam(self.model.get_params(config.lr_encoding, config.lr_net), betas=(0.9, 0.99), eps=1e-15)
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda iter: 0.1 ** min(iter / 30000, 1))
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 0.1 ** min(step / 30000, 1))
         self.criterion = torch.nn.MSELoss(reduction='none')
         self.scaler = torch.amp.GradScaler('cuda', enabled=config.use_fp16)
         self.ema = torch_ema.ExponentialMovingAverage(self.model.parameters(), decay=config.ema_decay)
@@ -221,6 +221,7 @@ class Trainer:
         imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_rgb_side_by_side, fps=25, quality=8, macro_block_size=1)
         imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
 
+    @torch.compile
     def train_step_static(self, data):
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
@@ -267,6 +268,7 @@ class Trainer:
 
         return pred_rgb, gt_rgb, loss
 
+    @torch.compile
     def train_step_dynamics(self, data):
         rays_o = data['rays_o']  # [B, N, 3]
         rays_d = data['rays_d']  # [B, N, 3]
