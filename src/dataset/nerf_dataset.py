@@ -8,6 +8,35 @@ import os
 import typing
 
 
+def visualize_poses(poses, size=0.1):
+    import trimesh
+    import numpy as np
+    # poses: [B, 4, 4]
+
+    axes = trimesh.creation.axis(axis_length=4)
+    box = trimesh.primitives.Box(extents=(2, 2, 2)).as_outline()
+    box.colors = np.array([[128, 128, 128]] * len(box.entities))
+    objects = [axes, box]
+
+    for pose in poses:
+        # a camera is visualized with 8 line segments.
+        pos = pose[:3, 3]
+        a = pos + size * pose[:3, 0] + size * pose[:3, 1] + size * pose[:3, 2]
+        b = pos - size * pose[:3, 0] + size * pose[:3, 1] + size * pose[:3, 2]
+        c = pos - size * pose[:3, 0] - size * pose[:3, 1] + size * pose[:3, 2]
+        d = pos + size * pose[:3, 0] - size * pose[:3, 1] + size * pose[:3, 2]
+
+        dir = (a + b + c + d) / 4 - pos
+        dir = dir / (np.linalg.norm(dir) + 1e-8)
+        o = pos + dir * 3
+
+        segs = np.array([[pos, a], [pos, b], [pos, c], [pos, d], [a, b], [b, c], [c, d], [d, a], [pos, o]])
+        segs = trimesh.load_path(segs)
+        objects.append(segs)
+
+    trimesh.Scene(objects).show()
+
+
 @dataclasses.dataclass
 class NeRFDatasetConfig:
     # required options
@@ -38,7 +67,19 @@ class NeRFDataset:
     def __init__(self, config: NeRFDatasetConfig, dataset_type: typing.Literal['train', 'val', 'test']):
         base_dataset_dir = os.path.join(config.data_dir, config.dataset_dir)
         if os.path.exists(os.path.join(base_dataset_dir, 'transforms.json')):
-            raise NotImplementedError('[NOT IMPLEMENTED] DatasetColmap')
+            self.mode = 'colmap'
+            self.dataset = DatasetColmap(
+                dataset_path=base_dataset_dir,
+                dataset_type=dataset_type,
+                downscale=config.downscale,
+                camera_radius_scale=config.camera_radius_scale,
+                camera_offset=config.camera_offset,
+                use_error_map=config.use_error_map,
+                use_preload=config.use_preload,
+                use_fp16=config.use_fp16,
+                color_space=config.color_space,
+                device=torch.device(config.device),
+            )
         elif os.path.exists(os.path.join(base_dataset_dir, 'transforms_train.json')):
             self.mode = 'blender'
             self.dataset = DatasetBlender(
@@ -61,6 +102,8 @@ class NeRFDataset:
         self.dataset_type = dataset_type
         self.num_rays = config.num_rays if dataset_type == 'train' else -1
         self.device = torch.device(config.device)
+
+        visualize_poses(self.dataset.poses.cpu().numpy(), size=0.1)
 
     def collate(self, batch: list):
         B = len(batch)  # a list of length 1

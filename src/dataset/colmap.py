@@ -5,7 +5,163 @@ import os
 
 
 class DatasetColmap(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, downscale: int):
+    def __init__(self,
+                 dataset_path,
+                 dataset_type: typing.Literal['train', 'val', 'test'],
+                 downscale: int,
+                 camera_radius_scale: float,
+                 camera_offset: list,
+                 use_error_map: bool,
+                 use_preload: bool,
+                 use_fp16: float,
+                 color_space: str,
+                 device: torch.device
+                 ):
+        import numpy as np
+        import cv2
         import json
-        with open(os.path.join(dataset_path, 'transforms.json'), 'r') as f:
-            transform = json.load(f)
+
+        # ref: https://github.com/NVlabs/instant-ngp/blob/b76004c8cf478880227401ae763be4c02f80b62f/include/neural-graphics-primitives/nerf_loader.h#L50
+        def nerf_matrix_to_ngp(pose, scale: float, offset: list):
+            # for the fox dataset, 0.33 scales camera radius to ~ 2
+            new_pose = np.array([
+                [pose[1, 0], -pose[1, 1], -pose[1, 2], pose[1, 3] * scale + offset[0]],
+                [pose[2, 0], -pose[2, 1], -pose[2, 2], pose[2, 3] * scale + offset[1]],
+                [pose[0, 0], -pose[0, 1], -pose[0, 2], pose[0, 3] * scale + offset[2]],
+                [0, 0, 0, 1],
+            ], dtype=np.float32)
+            return new_pose
+
+        images = []
+        poses = []
+        times = []
+        with open(os.path.join(dataset_path, 'transforms.json'), 'r') as json_file:
+            transform = json.load(json_file)
+
+            if 'h' in transform and 'w' in transform:
+                self.height = int(transform['h']) // downscale
+                self.width = int(transform['w']) // downscale
+            else:
+                self.height = self.width = None
+
+            if dataset_type == 'train' or dataset_type == 'val':
+                frames = transform['frames'][1:] if dataset_type == 'train' else transform['frames'][:1]
+                widths = []
+                heights = []
+                for f in tqdm.tqdm(frames, desc=f'[Loading {self.__class__.__name__}...] ({dataset_type})'):
+                    filepath = os.path.abspath(os.path.normpath(os.path.join(dataset_path, f['file_path'])))
+                    if not os.path.exists(filepath):
+                        continue
+                    image = cv2.imread(str(filepath), cv2.IMREAD_UNCHANGED)  # [H, W, 3] o [H, W, 4]
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.shape[-1] == 3 else cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+                    if 'h' in transform and 'w' in transform:
+                        heights.append(int(transform['h']) // downscale)
+                        widths.append(int(transform['w']) // downscale)
+                    else:
+                        heights.append(image.shape[0] // downscale)
+                        widths.append(image.shape[1] // downscale)
+                    if downscale > 1 or image.shape[0] != heights[-1] or image.shape[1] != widths[-1]:
+                        image = cv2.resize(image, (image.shape[0] // downscale, image.shape[1] // downscale), interpolation=cv2.INTER_AREA)
+                    image = image.astype(np.float32) / 255.0
+                    images.append(image)
+                    poses.append(nerf_matrix_to_ngp(np.array(f['transform_matrix'], dtype=np.float32), scale=camera_radius_scale, offset=camera_offset))
+                    if 'time' in f:
+                        times.append(f['time'])
+                assert len(set(widths)) == 1 and len(set(heights)) == 1, '[INVALID DATASET IMAGES SIZE] All images must have the same size'
+                self.width = set(widths).pop()  # int
+                self.height = set(widths).pop()  # int
+            elif dataset_type == 'test':
+                f0, f1 = np.random.choice(transform['frames'], 2, replace=False)
+                pose0 = nerf_matrix_to_ngp(np.array(f0['transform_matrix'], dtype=np.float32), scale=camera_radius_scale, offset=camera_offset)  # [4, 4]
+                pose1 = nerf_matrix_to_ngp(np.array(f1['transform_matrix'], dtype=np.float32), scale=camera_radius_scale, offset=camera_offset)  # [4, 4]
+                time0 = f0['time'] if 'time' in f0 else int(os.path.basename(f0['file_path'])[:-4])
+                time1 = f1['time'] if 'time' in f1 else int(os.path.basename(f1['file_path'])[:-4])
+                from scipy.spatial.transform import Slerp, Rotation
+                rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
+                slerp = Slerp([0, 1], rots)
+
+                n_test = 10  # TODO: make this configurable
+                for i in range(n_test + 1):
+                    ratio = np.sin(((i / n_test) - 0.5) * np.pi) * 0.5 + 0.5
+                    pose = np.eye(4, dtype=np.float32)
+                    pose[:3, :3] = slerp(ratio).as_matrix()
+                    pose[:3, 3] = (1 - ratio) * pose0[:3, 3] + ratio * pose1[:3, 3]
+                    poses.append(pose)
+                    time = (1 - ratio) * time0 + ratio * time1
+                    times.append(time)
+
+                # manually find max time to normalize
+                if 'time' not in f0:
+                    max_time = 0
+                    for f in transform['frames']:
+                        max_time = max(max_time, int(os.path.basename(f['file_path'])[:-4]))
+                    times = [t / max_time for t in times]
+                assert self.width is not None and self.height is not None, '[INVALID DATASET SIZE] Test dataset must have a fixed size'
+            else:
+                raise NotImplementedError('[INVALID DATASET TYPE] DatasetColmap at: {}'.format(dataset_type))
+
+            if 'fl_x' in transform or 'fl_y' in transform:
+                fl_x = (transform['fl_x'] if 'fl_x' in transform else transform['fl_y']) / downscale
+                fl_y = (transform['fl_y'] if 'fl_y' in transform else transform['fl_x']) / downscale
+            elif 'camera_angle_x' in transform or 'camera_angle_y' in transform:
+                # blender, assert in radians. already downscaled since we use H/W
+                fl_x = self.width / (2 * np.tan(transform['camera_angle_x'] / 2)) if 'camera_angle_x' in transform else None
+                fl_y = self.height / (2 * np.tan(transform['camera_angle_y'] / 2)) if 'camera_angle_y' in transform else None
+                if fl_x is None: fl_x = fl_y
+                if fl_y is None: fl_y = fl_x
+            else:
+                raise RuntimeError('Failed to load focal length, please check the transforms.json!')
+            cx = (transform['cx'] / downscale) if 'cx' in transform else (self.width / 2)
+            cy = (transform['cy'] / downscale) if 'cy' in transform else (self.height / 2)
+            self.intrinsics = torch.tensor([fl_x, fl_y, cx, cy])
+
+        self.images = torch.from_numpy(np.stack(images, axis=0)) if len(images) > 0 else None  # [N, H, W, C]
+        self.poses = torch.from_numpy(np.stack(poses, axis=0))  # [N, 4, 4]
+        self.times = torch.from_numpy(np.asarray(times, dtype=np.float32)).view(-1, 1) if len(times) > 0 else None
+        self.dtype = torch.half if (use_fp16 and color_space != 'linear') else torch.float
+        self.color_space = color_space
+
+        # manual normalize
+        if self.times is not None and self.times.max() > 1:
+            self.times = self.times / (self.times.max() + 1e-8)  # normalize to [0, 1]
+
+        # calculate mean radius of all camera poses
+        self.radius = self.poses[:, :3, 3].norm(dim=-1).mean(0).item()
+
+        if use_error_map and dataset_type == 'train':
+            self.error_map = torch.ones([self.images.shape[0], 128 * 128], dtype=torch.float)  # [B, 128 * 128], flattened for easy indexing, fixed resolution...
+        else:
+            self.error_map = None
+
+        if use_preload:
+            if self.images is not None:
+                self.images = self.images.to().to(device)
+            self.poses = self.poses.to(device)
+            if self.times is not None:
+                self.times = self.times.to(device)
+            if self.error_map is not None:
+                self.error_map = self.error_map.to(device)
+
+        info = f"{self.__class__.__name__}({len(self.images)} images, {self.width}x{self.height}, {self.color_space}, radius={self.radius:.2f}, fl_x={self.intrinsics[0]:.2f}, fl_y={self.intrinsics[1]:.2f}, cx={self.intrinsics[2]:.2f}, cy={self.intrinsics[3]:.2f}, {self.dtype})"
+        print(f"Loaded: {info}")
+
+    def __len__(self):
+        return len(self.poses)
+
+    def __getitem__(self, idx):
+        return {
+            'image': self.images[idx] if self.images is not None else None,
+            'pose': self.poses[idx],
+            'time': self.times[idx] if self.times is not None else None,
+            'error_map': self.error_map[idx] if self.error_map is not None else None,
+        }
+
+    def __str__(self):
+        fields = f"Fields[" + ", ".join(f"{k}" for k, v in self.__dict__.items()) + "]"
+        return fields
+
+    def plot(self, index: int):
+        from matplotlib import pyplot as plt
+        image = self.images[index]
+        plt.imshow(image)
+        plt.show()

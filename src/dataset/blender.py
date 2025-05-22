@@ -5,10 +5,21 @@ import os
 
 
 class DatasetBlender(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, dataset_type: typing.Literal['train', 'val', 'test'], downscale: int, camera_radius_scale: float, camera_offset: list, use_error_map: bool, use_preload: bool, use_fp16: float, color_space: str, device: torch.device):
-        import json
-        import cv2
+    def __init__(self,
+                 dataset_path,
+                 dataset_type: typing.Literal['train', 'val', 'test'],
+                 downscale: int,
+                 camera_radius_scale: float,
+                 camera_offset: list,
+                 use_error_map: bool,
+                 use_preload: bool,
+                 use_fp16: float,
+                 color_space: str,
+                 device: torch.device
+                 ):
         import numpy as np
+        import cv2
+        import json
 
         # ref: https://github.com/NVlabs/instant-ngp/blob/b76004c8cf478880227401ae763be4c02f80b62f/include/neural-graphics-primitives/nerf_loader.h#L50
         def nerf_matrix_to_ngp(pose, scale: float, offset: list):
@@ -28,8 +39,11 @@ class DatasetBlender(torch.utils.data.Dataset):
         heights = []
         with open(os.path.join(dataset_path, 'transforms_' + dataset_type + '.json'), 'r') as json_file:
             transform = json.load(json_file)
-            for f in tqdm.tqdm(transform["frames"], desc=f'[Loading {self.__class__.__name__}...] ({dataset_type})'):
-                image = cv2.imread(dataset_path + f['file_path'] + '.png', cv2.IMREAD_UNCHANGED)  # [H, W, 3] o [H, W, 4]
+            for f in tqdm.tqdm(transform['frames'], desc=f'[Loading {self.__class__.__name__}...] ({dataset_type})'):
+                filepath = os.path.abspath(os.path.normpath(os.path.join(dataset_path, f['file_path'], '.png')))
+                if not os.path.exists(filepath):
+                    continue
+                image = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)  # [H, W, 3] o [H, W, 4]
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.shape[-1] == 3 else cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
                 if downscale > 1:
                     image = cv2.resize(image, (image.shape[0] // downscale, image.shape[1] // downscale), interpolation=cv2.INTER_AREA)
@@ -88,11 +102,11 @@ class DatasetBlender(torch.utils.data.Dataset):
         print(f"Loaded: {info}")
 
     def __len__(self):
-        return len(self.images)
+        return len(self.poses)
 
     def __getitem__(self, idx):
         return {
-            'image': self.images[idx],
+            'image': self.images[idx] if self.images is not None else None,
             'pose': self.poses[idx],
             'time': self.times[idx] if self.times is not None else None,
             'error_map': self.error_map[idx] if self.error_map is not None else None,
